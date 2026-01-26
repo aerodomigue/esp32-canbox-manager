@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ESP32 CDC ACM (USB Serial) -->
+    <!-- Standard CDC ACM class -->
+    <usb-device class="2" subclass="2" protocol="1" />
+
+    <!-- ESP32-S2/S3 native USB CDC -->
+    <usb-device vendor-id="0x303A" />
+
+    <!-- Espressif USB-JTAG-Serial -->
+    <usb-device vendor-id="0x303A" product-id="0x1001" />
+
+    <!-- CP210x USB to UART Bridge (common ESP32 dev boards) -->
+    <usb-device vendor-id="0x10C4" product-id="0xEA60" />
+    <usb-device vendor-id="0x10C4" product-id="0xEA70" />
+
+    <!-- FTDI FT232 (some dev boards) -->
+    <usb-device vendor-id="0x0403" product-id="0x6001" />
+    <usb-device vendor-id="0x0403" product-id="0x6015" />
+
+    <!-- CH340/CH341 (common cheap dev boards) -->
+    <usb-device vendor-id="0x1A86" product-id="0x7523" />
+    <usb-device vendor-id="0x1A86" product-id="0x5523" />
+</resources>

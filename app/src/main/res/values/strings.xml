@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CANBox Manager</string>
+
+    <!-- Navigation -->
+    <string name="nav_live">Live</string>
+    <string name="nav_can_config">CAN Config</string>
+    <string name="nav_calibration">Calibration</string>
+    <string name="nav_update">Update</string>
+    <string name="nav_debug">Debug</string>
+
+    <!-- Connection status -->
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connecting">Connecting…</string>
+
+    <!-- Live screen -->
+    <string name="live_rpm">RPM</string>
+    <string name="live_speed">km/h</string>
+    <string name="live_voltage">Battery</string>
+    <string name="live_temperature">Temp</string>
+    <string name="live_fuel">Fuel</string>
+    <string name="live_dte">DTE</string>
+    <string name="live_steering">Steering</string>
+    <string name="live_doors">Doors</string>
+    <string name="live_lights">Lights</string>
+    <string name="live_handbrake">Handbrake</string>
+
+    <!-- Common actions -->
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_reset">Reset</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_download">Download</string>
+    <string name="action_upload">Upload</string>
+
+    <!-- USB -->
+    <string name="usb_permission_title">USB Permission Required</string>
+    <string name="usb_permission_message">Allow CANBox Manager to access the USB device?</string>
+</resources>
