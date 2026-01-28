@@ -35,25 +35,30 @@ class CalibrationViewModel(
 
     fun loadConfig() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
-
-            repository.getCalibration()
-                .onSuccess { config ->
-                    originalConfig = config
-                    _uiState.update {
-                        it.copy(
-                            isLoading = false,
-                            config = config,
-                            hasChanges = false
-                        )
-                    }
-                }
-                .onFailure { error ->
-                    _uiState.update {
-                        it.copy(isLoading = false, error = error.message)
-                    }
-                }
+            loadConfigInternal()
         }
+    }
+
+    private suspend fun loadConfigInternal() {
+        _uiState.update { it.copy(isLoading = true, error = null) }
+
+        repository.getCalibration()
+            .onSuccess { config ->
+                originalConfig = config
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        isSaving = false,
+                        config = config,
+                        hasChanges = false
+                    )
+                }
+            }
+            .onFailure { error ->
+                _uiState.update {
+                    it.copy(isLoading = false, isSaving = false, error = error.message)
+                }
+            }
     }
 
     fun updateSteeringOffset(value: Int) {
@@ -96,53 +101,69 @@ class CalibrationViewModel(
 
     fun applyChanges() {
         viewModelScope.launch {
-            val config = _uiState.value.config
-            _uiState.update { it.copy(isSaving = true, error = null) }
+            applyChangesInternal()
+        }
+    }
 
-            // Apply each changed parameter
-            val results = mutableListOf<Result<Unit>>()
+    private suspend fun applyChangesInternal(): Boolean {
+        val config = _uiState.value.config
+        _uiState.update { it.copy(isSaving = true, error = null) }
 
-            if (config.steeringOffset != originalConfig.steeringOffset) {
-                results.add(repository.setCalibration("steer_offset", config.steeringOffset))
-            }
-            if (config.steeringScale != originalConfig.steeringScale) {
-                results.add(repository.setCalibration("steer_scale", config.steeringScale))
-            }
-            if (config.steeringInvert != originalConfig.steeringInvert) {
-                results.add(repository.setCalibration("steer_invert", if (config.steeringInvert) 1 else 0))
-            }
-            if (config.indicatorTimeout != originalConfig.indicatorTimeout) {
-                results.add(repository.setCalibration("indicator_timeout", config.indicatorTimeout))
-            }
-            if (config.rpmDivisor != originalConfig.rpmDivisor) {
-                results.add(repository.setCalibration("rpm_divisor", config.rpmDivisor))
-            }
-            if (config.tankCapacity != originalConfig.tankCapacity) {
-                results.add(repository.setCalibration("tank_capacity", config.tankCapacity))
-            }
-            if (config.dteDivisor != originalConfig.dteDivisor) {
-                results.add(repository.setCalibration("dte_divisor", config.dteDivisor))
-            }
+        // Apply each changed parameter with delay between commands
+        var success = true
 
-            val failed = results.any { it.isFailure }
-            if (failed) {
-                _uiState.update {
-                    it.copy(isSaving = false, error = "Failed to apply some settings")
-                }
-            } else {
-                _uiState.update {
-                    it.copy(isSaving = false, successMessage = "Settings applied (not saved to NVS)")
-                }
+        if (config.steeringOffset != originalConfig.steeringOffset) {
+            if (repository.setCalibration("steerOffset", config.steeringOffset).isFailure) success = false
+            kotlinx.coroutines.delay(100)
+        }
+        if (config.steeringScale != originalConfig.steeringScale) {
+            if (repository.setCalibration("steerScale", config.steeringScale).isFailure) success = false
+            kotlinx.coroutines.delay(100)
+        }
+        if (config.steeringInvert != originalConfig.steeringInvert) {
+            if (repository.setCalibration("steerInvert", if (config.steeringInvert) 1 else 0).isFailure) success = false
+            kotlinx.coroutines.delay(100)
+        }
+        if (config.indicatorTimeout != originalConfig.indicatorTimeout) {
+            if (repository.setCalibration("indTimeout", config.indicatorTimeout).isFailure) success = false
+            kotlinx.coroutines.delay(100)
+        }
+        if (config.rpmDivisor != originalConfig.rpmDivisor) {
+            if (repository.setCalibration("rpmDiv", config.rpmDivisor).isFailure) success = false
+            kotlinx.coroutines.delay(100)
+        }
+        if (config.tankCapacity != originalConfig.tankCapacity) {
+            if (repository.setCalibration("tankCap", config.tankCapacity).isFailure) success = false
+            kotlinx.coroutines.delay(100)
+        }
+        if (config.dteDivisor != originalConfig.dteDivisor) {
+            if (repository.setCalibration("dteDiv", config.dteDivisor).isFailure) success = false
+            kotlinx.coroutines.delay(100)
+        }
+
+        if (!success) {
+            _uiState.update {
+                it.copy(isSaving = false, error = "Failed to apply some settings")
+            }
+        } else {
+            _uiState.update {
+                it.copy(isSaving = false, successMessage = "Settings applied (not saved to NVS)")
             }
         }
+
+        return success
     }
 
     fun saveToNvs() {
         viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true, error = null) }
 
-            // First apply all changes
-            applyChanges()
+            // First apply all changes and wait
+            val applySuccess = applyChangesInternal()
+            if (!applySuccess) return@launch
+
+            // Delay before save
+            kotlinx.coroutines.delay(200)
 
             // Then save to NVS
             repository.saveCalibration()
@@ -170,7 +191,9 @@ class CalibrationViewModel(
 
             repository.resetCalibration()
                 .onSuccess {
-                    loadConfig()
+                    // Wait before reloading config
+                    kotlinx.coroutines.delay(200)
+                    loadConfigInternal()
                     _uiState.update {
                         it.copy(successMessage = "Reset to defaults")
                     }

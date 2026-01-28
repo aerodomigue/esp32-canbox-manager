@@ -14,9 +14,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.canbox.manager.data.usb.UsbConnectionState
 import com.canbox.manager.domain.model.DoorStatus
 import com.canbox.manager.domain.model.LightStatus
@@ -33,17 +36,33 @@ fun LiveScreen(
 ) {
     val connectionState by viewModel.connectionState.collectAsState()
     val vehicleData by viewModel.vehicleData.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    LaunchedEffect(connectionState) {
-        if (connectionState.isConnected) {
-            viewModel.startPolling()
-        } else {
-            viewModel.stopPolling()
+    // Start/stop polling based on lifecycle (screen visibility)
+    DisposableEffect(lifecycleOwner, connectionState) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    if (connectionState.isConnected) {
+                        viewModel.startPolling()
+                    }
+                }
+                Lifecycle.Event.ON_PAUSE -> {
+                    viewModel.stopPolling()
+                }
+                else -> {}
+            }
         }
-    }
+        lifecycleOwner.lifecycle.addObserver(observer)
 
-    DisposableEffect(Unit) {
+        // Start polling immediately if already connected and resumed
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+            connectionState.isConnected) {
+            viewModel.startPolling()
+        }
+
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.stopPolling()
         }
     }
@@ -183,6 +202,7 @@ private fun LiveDashboard(data: VehicleData) {
         // Status bar
         StatusBar(
             mode = data.mode,
+            configFile = data.configFile,
             handbrake = data.handbrake,
             reverse = data.reverse
         )
@@ -326,6 +346,7 @@ private fun LightIndicator(
 @Composable
 private fun StatusBar(
     mode: VehicleMode,
+    configFile: String?,
     handbrake: Boolean,
     reverse: Boolean
 ) {
@@ -336,9 +357,14 @@ private fun StatusBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Mode
+        // Mode with config file
+        val modeText = if (!configFile.isNullOrEmpty()) {
+            "${mode.name} ($configFile)"
+        } else {
+            mode.name
+        }
         Text(
-            text = "Mode: ${mode.name}",
+            text = modeText,
             style = MaterialTheme.typography.bodyMedium,
             color = when (mode) {
                 VehicleMode.REAL -> StatusConnected
