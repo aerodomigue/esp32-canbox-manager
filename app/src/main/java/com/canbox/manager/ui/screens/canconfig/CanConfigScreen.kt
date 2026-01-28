@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.canbox.manager.data.github.GitHubConfigFile
 import com.canbox.manager.domain.model.CanConfigFile
 import com.canbox.manager.domain.model.VehicleMode
 import com.canbox.manager.ui.theme.StatusConnected
@@ -40,6 +41,11 @@ fun CanConfigScreen(
         if (connectionState.isConnected) {
             viewModel.refresh()
         }
+    }
+
+    // Load GitHub configs on first composition
+    LaunchedEffect(Unit) {
+        viewModel.loadGithubConfigs()
     }
 
     Column(
@@ -113,31 +119,29 @@ fun CanConfigScreen(
             Spacer(modifier = Modifier.height(8.dp))
         }
 
-        // Config files list
-        Text(
-            text = "Configurations on Device",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (uiState.deviceFiles.isEmpty() && !uiState.isLoading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
+        // Content in a scrollable column
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Device configs section
+            item {
                 Text(
-                    text = "No configuration files found",
+                    text = "On Device",
+                    style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+
+            if (uiState.deviceFiles.isEmpty() && !uiState.isLoading) {
+                item {
+                    Text(
+                        text = "No configuration files",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            } else {
                 items(uiState.deviceFiles) { file ->
                     ConfigFileItem(
                         file = file,
@@ -146,18 +150,57 @@ fun CanConfigScreen(
                     )
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            // GitHub configs section
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Available on GitHub",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (uiState.isLoadingGithub) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    }
+                }
+            }
 
-        // Import button
-        OutlinedButton(
-            onClick = { filePickerLauncher.launch("*/*") },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Filled.Upload, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Import from file")
+            if (uiState.githubFiles.isEmpty() && !uiState.isLoadingGithub) {
+                item {
+                    Text(
+                        text = "No files found",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            } else {
+                items(uiState.githubFiles) { file ->
+                    val alreadyOnDevice = uiState.deviceFiles.any { it.filename == file.name }
+                    GitHubFileItem(
+                        file = file,
+                        alreadyOnDevice = alreadyOnDevice,
+                        onDownload = { viewModel.downloadAndUpload(file) }
+                    )
+                }
+            }
+
+            // Import from file button
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                OutlinedButton(
+                    onClick = { filePickerLauncher.launch("*/*") },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Upload, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Import from file")
+                }
+            }
         }
     }
 }
@@ -247,5 +290,63 @@ private fun ConfigFileItem(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun GitHubFileItem(
+    file: GitHubConfigFile,
+    alreadyOnDevice: Boolean,
+    onDownload: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Cloud,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column {
+                    Text(
+                        text = file.name,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "${file.size} bytes",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (alreadyOnDevice) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = "Already on device",
+                    tint = StatusConnected
+                )
+            } else {
+                TextButton(onClick = onDownload) {
+                    Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add")
+                }
+            }
+        }
     }
 }

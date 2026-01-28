@@ -49,7 +49,7 @@ val appModule = module {
 
     // ViewModels
     viewModel { LiveViewModel(get()) }
-    viewModel { CanConfigViewModel(get()) }
+    viewModel { CanConfigViewModel(get(), get()) }
     viewModel { CalibrationViewModel(get()) }
     viewModel { UpdateViewModel(get(), get()) }
     viewModel { DebugViewModel(get()) }

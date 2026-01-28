@@ -7,6 +7,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+data class GitHubConfigFile(
+    val name: String,
+    val downloadUrl: String,
+    val size: Long
+)
+
 class GitHubRepository(
     private val api: GitHubApi
 ) {
@@ -80,6 +86,40 @@ class GitHubRepository(
             Result.success(releases)
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching releases", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Get list of config files from GitHub repo data folder
+     */
+    suspend fun getConfigFiles(): Result<List<GitHubConfigFile>> = withContext(Dispatchers.IO) {
+        try {
+            Log.d(TAG, "Fetching config files from GitHub...")
+            val contents = api.getConfigFiles()
+            val files = contents
+                .filter { it.type == "file" && it.name.endsWith(".json") }
+                .map { GitHubConfigFile(it.name, it.downloadUrl ?: "", it.size) }
+            Log.d(TAG, "Found ${files.size} config files")
+            Result.success(files)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching config files", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Download a config file content as string
+     */
+    suspend fun downloadConfigFile(url: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            Log.d(TAG, "Downloading config: $url")
+            val response = api.downloadFile(url)
+            val content = response.string()
+            Log.d(TAG, "Downloaded ${content.length} chars")
+            Result.success(content)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error downloading config", e)
             Result.failure(e)
         }
     }

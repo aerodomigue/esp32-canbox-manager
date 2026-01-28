@@ -12,10 +12,22 @@ interface GitHubApi {
     @GET("repos/aerodomigue/esp32-canbox-manager/releases/latest")
     suspend fun getAppLatestRelease(): GitHubReleaseDto
 
+    @GET("repos/aerodomigue/esp32-canbox-nissan/contents/data")
+    suspend fun getConfigFiles(): List<GitHubContentDto>
+
     @Streaming
     @GET
     suspend fun downloadFile(@Url url: String): okhttp3.ResponseBody
 }
+
+data class GitHubContentDto(
+    val name: String,
+    val path: String,
+    val size: Long,
+    @SerializedName("download_url")
+    val downloadUrl: String?,
+    val type: String // "file" or "dir"
+)
 
 data class GitHubReleaseDto(
     @SerializedName("tag_name")

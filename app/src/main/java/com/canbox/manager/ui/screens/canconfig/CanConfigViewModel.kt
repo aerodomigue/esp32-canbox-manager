@@ -2,6 +2,8 @@ package com.canbox.manager.ui.screens.canconfig
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.canbox.manager.data.github.GitHubConfigFile
+import com.canbox.manager.data.github.GitHubRepository
 import com.canbox.manager.data.repository.CanBoxRepository
 import com.canbox.manager.data.usb.UsbConnectionState
 import com.canbox.manager.domain.model.CanConfigFile
@@ -14,11 +16,14 @@ data class CanConfigUiState(
     val activeConfig: String? = null,
     val mode: VehicleMode = VehicleMode.UNKNOWN,
     val deviceFiles: List<CanConfigFile> = emptyList(),
+    val githubFiles: List<GitHubConfigFile> = emptyList(),
+    val isLoadingGithub: Boolean = false,
     val error: String? = null
 )
 
 class CanConfigViewModel(
-    private val repository: CanBoxRepository
+    private val repository: CanBoxRepository,
+    private val gitHubRepository: GitHubRepository
 ) : ViewModel() {
 
     val connectionState: StateFlow<UsbConnectionState> = repository.connectionState
@@ -129,5 +134,45 @@ class CanConfigViewModel(
 
     fun clearError() {
         _uiState.update { it.copy(error = null) }
+    }
+
+    fun loadGithubConfigs() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingGithub = true) }
+
+            gitHubRepository.getConfigFiles()
+                .onSuccess { files ->
+                    _uiState.update {
+                        it.copy(isLoadingGithub = false, githubFiles = files)
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(isLoadingGithub = false, error = "GitHub: ${error.message}")
+                    }
+                }
+        }
+    }
+
+    fun downloadAndUpload(file: GitHubConfigFile) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+
+            gitHubRepository.downloadConfigFile(file.downloadUrl)
+                .onSuccess { content ->
+                    repository.uploadCanConfig(file.name, content.toByteArray())
+                        .onSuccess { refresh() }
+                        .onFailure { error ->
+                            _uiState.update {
+                                it.copy(isLoading = false, error = "Upload failed: ${error.message}")
+                            }
+                        }
+                }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(isLoading = false, error = "Download failed: ${error.message}")
+                    }
+                }
+        }
     }
 }

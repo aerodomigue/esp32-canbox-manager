@@ -177,19 +177,30 @@ class CanBoxRepository(
             return Result.failure(Exception("Upload start failed"))
         }
 
-        // Send data in chunks
-        val chunkSize = 512
+        // Send data in chunks (150 bytes = 200 chars base64, conservative for reliability)
+        val chunkSize = 150
+        var totalSent = 0
         for (i in content.indices step chunkSize) {
             val chunk = content.sliceArray(i until minOf(i + chunkSize, content.size))
             val base64 = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP)
-            val dataResult = usbManager.sendCommand("CAN UPLOAD DATA $base64")
+            val dataResult = usbManager.sendCommand("CAN UPLOAD DATA $base64", timeoutMs = 5000)
             if (dataResult.isFailure) {
+                usbManager.sendCommand("CAN UPLOAD ABORT")
                 return Result.failure(Exception("Upload data failed at offset $i"))
             }
+            totalSent += chunk.size
+            // Small delay to let ESP32 process
+            kotlinx.coroutines.delay(10)
+        }
+
+        // Verify all bytes sent
+        if (totalSent != content.size) {
+            usbManager.sendCommand("CAN UPLOAD ABORT")
+            return Result.failure(Exception("Upload incomplete: $totalSent/${content.size}"))
         }
 
         // End upload
-        return usbManager.sendCommand("CAN UPLOAD END").map {
+        return usbManager.sendCommand("CAN UPLOAD END", timeoutMs = 5000).map {
             if (!CommandParser.isSuccess(it)) {
                 throw Exception(CommandParser.getErrorMessage(it) ?: "Upload end failed")
             }
