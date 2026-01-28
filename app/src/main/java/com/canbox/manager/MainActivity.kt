@@ -116,22 +116,24 @@ fun MainScreen(repository: CanBoxRepository) {
     val gitHubRepository: GitHubRepository = koinInject()
 
     // Check for app updates on startup
-    var startupCheckDone by remember { mutableStateOf(false) }
+    var appCheckDone by remember { mutableStateOf(false) }
+    var firmwareCheckDone by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        // Check app update
+        // Check app update once
         gitHubRepository.checkAppUpdate(BuildConfig.VERSION_NAME)
             .onSuccess { updateVersion ->
                 if (updateVersion != null) {
                     showAboutDialog = true
                 }
             }
-        startupCheckDone = true
+        appCheckDone = true
     }
 
-    // Check for ESP firmware updates when connected
-    LaunchedEffect(connectionState.isConnected, startupCheckDone) {
-        if (connectionState.isConnected && startupCheckDone && !showAboutDialog) {
+    // Check for ESP firmware updates when connected (only once)
+    LaunchedEffect(connectionState.isConnected) {
+        if (connectionState.isConnected && appCheckDone && !firmwareCheckDone && !showAboutDialog) {
+            firmwareCheckDone = true
             // Get current firmware version
             repository.getSysInfo().onSuccess { firmwareInfo ->
                 val currentVersion = firmwareInfo.version.removePrefix("v")
@@ -139,7 +141,7 @@ fun MainScreen(repository: CanBoxRepository) {
                 gitHubRepository.getReleases().onSuccess { releases ->
                     val latest = releases.firstOrNull { !it.prerelease }
                     if (latest != null) {
-                        val latestVersion = latest.tagName.removePrefix("v")
+                        val latestVersion = latest.tagName.removePrefix("v").removePrefix("V")
                         if (isNewerVersion(latestVersion, currentVersion)) {
                             navController.navigate("update") {
                                 popUpTo("live") { inclusive = false }
