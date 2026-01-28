@@ -2,25 +2,30 @@
 
 Android companion app for configuring and monitoring the ESP32 CANBox (Nissan Juke F15 CAN bridge).
 
-> **Status:** Work in Progress - Compiles but not yet tested on device
+## Screenshots
+
+| Live Dashboard | CAN Config |
+|:-:|:-:|
+| ![Live](docs/LIVE.png) | ![CAN](docs/CAN.png) |
+
+| Calibration | Firmware Update |
+|:-:|:-:|
+| ![Calib](docs/CALIB.png) | ![Update](docs/UPDATE.png) |
 
 ## Features
 
 - **Live Dashboard** - Real-time vehicle data (RPM, speed, voltage, temperature, fuel, steering angle, doors, lights)
-- **CAN Config** - Manage vehicle configuration files (JSON) on the ESP32
+- **CAN Config** - Manage vehicle configuration files on the ESP32
 - **Calibration** - Adjust calibration parameters (steering offset/scale, RPM divisor, tank capacity, etc.)
-- **Firmware Update** - OTA updates via USB serial (GitHub releases integration planned)
-- **Debug Console** - CAN frame logger with filtering
-
-## Screenshots
-
-*Coming soon*
+- **Firmware Update** - OTA updates via USB serial with GitHub releases integration
+- **Debug Console** - Send commands and view ESP32 responses
+- **Auto Update Check** - Notifies when app or firmware updates are available
 
 ## Requirements
 
 - Android device with USB OTG support
 - Android 7.0+ (API 24)
-- ESP32 CANBox running [Nissan-canbus-headunit](https://github.com/aerodomigue/Nissan-canbus-headunit) firmware
+- ESP32 CANBox running [esp32-canbox-nissan](https://github.com/aerodomigue/esp32-canbox-nissan) firmware
 
 ## Target Device
 
@@ -38,7 +43,6 @@ The app communicates with the ESP32 via USB CDC serial (115200 baud) using AT-st
 | `CAN STATUS/LIST/LOAD/DELETE` | Vehicle config files (LittleFS) |
 | `LOG ON/OFF` | CAN frame debug logging |
 | `OTA START/DATA/END` | Firmware update (base64) |
-| `SYS BOOTLOADER` | Enter bootloader for esptool flash |
 
 ## Building
 
@@ -61,13 +65,16 @@ app/build/outputs/apk/debug/app-debug.apk
 - Navigation Compose
 - Koin (Dependency Injection)
 - usb-serial-for-android
-- Retrofit (for GitHub API)
-- Room (for log storage)
+- Retrofit (GitHub API)
 
 ## License
 
 MIT License - see [LICENSE](LICENSE)
 
+## Author
+
+**aerodomigue** - [GitHub](https://github.com/aerodomigue)
+
 ## Related Projects
 
-- [Nissan-canbus-headunit](https://github.com/aerodomigue/Nissan-canbus-headunit) - ESP32 firmware
+- [esp32-canbox-nissan](https://github.com/aerodomigue/esp32-canbox-nissan) - ESP32 firmware
