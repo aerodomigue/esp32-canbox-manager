@@ -30,6 +30,7 @@ class UpdateViewModel(
 
     companion object {
         private const val TAG = "UpdateViewModel"
+        private const val MAX_FLASH_RETRIES = 3
     }
 
     val connectionState: StateFlow<UsbConnectionState> = repository.connectionState
@@ -152,133 +153,159 @@ class UpdateViewModel(
      * 5. ESP32 reboots automatically after 2 seconds
      *
      * Chunk size: 180 bytes binary = 240 chars base64 (fits in 256 byte buffer)
+     * Retry: up to 3 attempts if flash fails
      */
     private suspend fun flashFirmware(firmwareFile: File) {
+        val firmwareData = firmwareFile.readBytes()
+        val md5 = firmwareData.md5()
+        val firmwareSize = firmwareData.size
+        android.util.Log.d(TAG, "OTA: size=$firmwareSize, md5=$md5")
+
+        var lastError: Exception? = null
+
+        for (attempt in 1..MAX_FLASH_RETRIES) {
+            try {
+                android.util.Log.d(TAG, "OTA: Attempt $attempt/$MAX_FLASH_RETRIES")
+
+                _uiState.update {
+                    it.copy(
+                        updateProgress = UpdateProgress(
+                            state = UpdateState.PREPARING,
+                            message = if (attempt > 1) "Retry $attempt/$MAX_FLASH_RETRIES..." else "Preparing OTA update..."
+                        )
+                    )
+                }
+
+                // Abort any previous OTA
+                repository.otaAbort()
+                kotlinx.coroutines.delay(500)
+
+                _uiState.update {
+                    it.copy(
+                        updateProgress = UpdateProgress(
+                            state = UpdateState.FLASHING,
+                            message = if (attempt > 1) "Starting OTA (attempt $attempt)..." else "Starting OTA update...",
+                            totalBytes = firmwareSize.toLong()
+                        )
+                    )
+                }
+
+                // Step 1: Start OTA
+                val startResponse = repository.otaStart(firmwareSize, md5)
+                    .getOrElse { error ->
+                        android.util.Log.e(TAG, "OTA: Start failed - ${error.message}")
+                        throw error
+                    }
+                android.util.Log.d(TAG, "OTA: Started - $startResponse")
+
+                // Step 2: Send data chunks (180 bytes binary = 240 chars base64)
+                val chunkSize = 180
+                var sent = 0
+                var lastLogPercent = -10
+
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    while (sent < firmwareSize) {
+                        val end = minOf(sent + chunkSize, firmwareSize)
+                        val chunk = firmwareData.sliceArray(sent until end)
+
+                        val dataResponse = repository.otaSendData(chunk)
+                            .getOrElse { error ->
+                                android.util.Log.e(TAG, "OTA: Data failed at $sent: ${error.message}")
+                                throw error
+                            }
+
+                        sent = end
+                        val percent = (sent * 100) / firmwareSize
+
+                        // Update UI
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            _uiState.update {
+                                it.copy(
+                                    updateProgress = it.updateProgress.copy(
+                                        state = UpdateState.FLASHING,
+                                        progress = sent.toFloat() / firmwareSize,
+                                        bytesTransferred = sent.toLong(),
+                                        totalBytes = firmwareSize.toLong(),
+                                        message = if (attempt > 1) "Flashing (attempt $attempt)... $percent%" else "Flashing... $percent%"
+                                    )
+                                )
+                            }
+                        }
+
+                        // Log progress every 10%
+                        if (percent >= lastLogPercent + 10) {
+                            lastLogPercent = percent
+                            android.util.Log.d(TAG, "OTA: $percent% ($sent/$firmwareSize) - $dataResponse")
+                        }
+                    }
+                }
+
+                android.util.Log.d(TAG, "OTA: Transfer complete, finalizing...")
+                _uiState.update {
+                    it.copy(
+                        updateProgress = it.updateProgress.copy(
+                            message = "Verifying MD5..."
+                        )
+                    )
+                }
+
+                // Step 3: Finalize
+                val endResponse = repository.otaEnd()
+                    .getOrElse { error ->
+                        android.util.Log.e(TAG, "OTA: End failed - ${error.message}")
+                        throw error
+                    }
+                android.util.Log.d(TAG, "OTA: Complete! $endResponse")
+
+                _uiState.update {
+                    it.copy(
+                        updateProgress = UpdateProgress(
+                            state = UpdateState.SUCCESS,
+                            progress = 1f,
+                            message = "Firmware updated! Rebooting..."
+                        )
+                    )
+                }
+
+                // Wait for device to reboot and reconnect
+                kotlinx.coroutines.delay(5000)
+                loadCurrentFirmware()
+
+                // Success - exit retry loop
+                return
+
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "OTA: Attempt $attempt failed - ${e.message}")
+                lastError = e
+
+                // Try to abort before retry
+                try {
+                    repository.otaAbort()
+                } catch (_: Exception) {}
+
+                if (attempt < MAX_FLASH_RETRIES) {
+                    _uiState.update {
+                        it.copy(
+                            updateProgress = UpdateProgress(
+                                state = UpdateState.PREPARING,
+                                message = "Attempt $attempt failed, retrying..."
+                            )
+                        )
+                    }
+                    kotlinx.coroutines.delay(2000) // Wait before retry
+                }
+            }
+        }
+
+        // All retries failed
+        android.util.Log.e(TAG, "OTA: All $MAX_FLASH_RETRIES attempts failed")
         _uiState.update {
             it.copy(
                 updateProgress = UpdateProgress(
-                    state = UpdateState.PREPARING,
-                    message = "Preparing OTA update..."
+                    state = UpdateState.ERROR,
+                    message = "Flash failed after $MAX_FLASH_RETRIES attempts: ${lastError?.message}"
                 )
             )
-        }
-
-        try {
-            val firmwareData = firmwareFile.readBytes()
-            val md5 = firmwareData.md5()
-            val firmwareSize = firmwareData.size
-            android.util.Log.d(TAG, "OTA: size=$firmwareSize, md5=$md5")
-
-            // Abort any previous OTA
-            repository.otaAbort()
-
-            _uiState.update {
-                it.copy(
-                    updateProgress = UpdateProgress(
-                        state = UpdateState.FLASHING,
-                        message = "Starting OTA update...",
-                        totalBytes = firmwareSize.toLong()
-                    )
-                )
-            }
-
-            // Step 1: Start OTA
-            val startResponse = repository.otaStart(firmwareSize, md5)
-                .getOrElse { error ->
-                    android.util.Log.e(TAG, "OTA: Start failed - ${error.message}")
-                    throw error
-                }
-            android.util.Log.d(TAG, "OTA: Started - $startResponse")
-
-            // Step 2: Send data chunks (180 bytes binary = 240 chars base64)
-            val chunkSize = 180
-            var sent = 0
-            var lastLogPercent = -10
-
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                while (sent < firmwareSize) {
-                    val end = minOf(sent + chunkSize, firmwareSize)
-                    val chunk = firmwareData.sliceArray(sent until end)
-
-                    val dataResponse = repository.otaSendData(chunk)
-                        .getOrElse { error ->
-                            android.util.Log.e(TAG, "OTA: Data failed at $sent: ${error.message}")
-                            throw error
-                        }
-
-                    sent = end
-                    val percent = (sent * 100) / firmwareSize
-
-                    // Update UI
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        _uiState.update {
-                            it.copy(
-                                updateProgress = it.updateProgress.copy(
-                                    state = UpdateState.FLASHING,
-                                    progress = sent.toFloat() / firmwareSize,
-                                    bytesTransferred = sent.toLong(),
-                                    totalBytes = firmwareSize.toLong(),
-                                    message = "Flashing... $percent%"
-                                )
-                            )
-                        }
-                    }
-
-                    // Log progress every 10%
-                    if (percent >= lastLogPercent + 10) {
-                        lastLogPercent = percent
-                        android.util.Log.d(TAG, "OTA: $percent% ($sent/$firmwareSize) - $dataResponse")
-                    }
-                }
-            }
-
-            android.util.Log.d(TAG, "OTA: Transfer complete, finalizing...")
-            _uiState.update {
-                it.copy(
-                    updateProgress = it.updateProgress.copy(
-                        message = "Verifying MD5..."
-                    )
-                )
-            }
-
-            // Step 3: Finalize
-            val endResponse = repository.otaEnd()
-                .getOrElse { error ->
-                    android.util.Log.e(TAG, "OTA: End failed - ${error.message}")
-                    throw error
-                }
-            android.util.Log.d(TAG, "OTA: Complete! $endResponse")
-
-            _uiState.update {
-                it.copy(
-                    updateProgress = UpdateProgress(
-                        state = UpdateState.SUCCESS,
-                        progress = 1f,
-                        message = "Firmware updated! Rebooting..."
-                    )
-                )
-            }
-
-            // Wait for device to reboot and reconnect
-            kotlinx.coroutines.delay(5000)
-            loadCurrentFirmware()
-
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "OTA: Failed - ${e.message}")
-
-            // Try to abort
-            try {
-                repository.otaAbort()
-            } catch (_: Exception) {}
-
-            _uiState.update {
-                it.copy(
-                    updateProgress = UpdateProgress(
-                        state = UpdateState.ERROR,
-                        message = "Flash failed: ${e.message}"
-                    )
-                )
-            }
         }
     }
 

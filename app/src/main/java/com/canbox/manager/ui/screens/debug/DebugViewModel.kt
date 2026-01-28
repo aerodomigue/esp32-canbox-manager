@@ -1,13 +1,21 @@
 package com.canbox.manager.ui.screens.debug
 
+import android.content.Context
+import android.content.Intent
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.canbox.manager.data.repository.CanBoxRepository
 import com.canbox.manager.data.usb.UsbConnectionState
 import com.canbox.manager.domain.model.CanFilter
 import com.canbox.manager.domain.model.CanFrame
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
 data class DebugUiState(
     val isLogging: Boolean = false,
@@ -128,6 +136,64 @@ class DebugViewModel(
 
     fun clearError() {
         _uiState.update { it.copy(error = null) }
+    }
+
+    fun exportToFile(context: Context) {
+        viewModelScope.launch {
+            val frames = _uiState.value.frames
+            if (frames.isEmpty()) {
+                _uiState.update { it.copy(error = "No frames to export") }
+                return@launch
+            }
+
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    createExportFile(context, frames)
+                }
+
+                // Share the file
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file
+                )
+
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/csv"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+
+                context.startActivity(Intent.createChooser(shareIntent, "Export CAN Log"))
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = "Export failed: ${e.message}") }
+            }
+        }
+    }
+
+    private fun createExportFile(context: Context, frames: List<CanFrame>): File {
+        val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+        val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+        val filename = "canlog_${dateFormat.format(Date())}.csv"
+
+        val exportDir = File(context.cacheDir, "exports")
+        exportDir.mkdirs()
+        val file = File(exportDir, filename)
+
+        file.bufferedWriter().use { writer ->
+            // CSV header
+            writer.write("Timestamp,Direction,CAN_ID,DLC,Data\n")
+
+            // Frames (reversed to have oldest first)
+            frames.reversed().forEach { frame ->
+                val time = timeFormat.format(Date(frame.timestamp))
+                val canId = "0x%03X".format(frame.canId)
+                val data = frame.data.joinToString(" ") { "%02X".format(it) }
+                writer.write("$time,${frame.direction},$canId,${frame.dlc},$data\n")
+            }
+        }
+
+        return file
     }
 
     override fun onCleared() {

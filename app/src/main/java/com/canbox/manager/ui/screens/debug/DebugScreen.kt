@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.canbox.manager.domain.model.CanFilter
@@ -24,6 +25,7 @@ import java.util.*
 fun DebugScreen(
     viewModel: DebugViewModel = koinViewModel()
 ) {
+    val context = LocalContext.current
     val connectionState by viewModel.connectionState.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
 
@@ -75,6 +77,14 @@ fun DebugScreen(
             // Clear button
             IconButton(onClick = { viewModel.clearFrames() }) {
                 Icon(Icons.Filled.Delete, "Clear")
+            }
+
+            // Export button
+            IconButton(
+                onClick = { viewModel.exportToFile(context) },
+                enabled = uiState.frames.isNotEmpty()
+            ) {
+                Icon(Icons.Filled.Share, "Export")
             }
 
             Spacer(Modifier.weight(1f))
