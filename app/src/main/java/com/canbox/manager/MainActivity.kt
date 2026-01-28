@@ -74,6 +74,13 @@ class MainActivity : ComponentActivity() {
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            hideSystemBars()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         // Register USB receiver for attach/detach while app is open

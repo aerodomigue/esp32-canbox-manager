@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -59,11 +60,18 @@ fun TopNavigationBar(
         currentDestination?.hierarchy?.any { it.route == route.route } == true
     }.coerceAtLeast(0)
 
+    // Dynamic tab height based on screen aspect ratio
+    val configuration = LocalConfiguration.current
+    val screenRatio = configuration.screenWidthDp.toFloat() / configuration.screenHeightDp.toFloat()
+    // 16:9 landscape = 1.77, S8 landscape ~2.05
+    val tabHeight = if (screenRatio < 1.9f) 48.dp else 36.dp
+    val iconSize = if (screenRatio < 1.9f) 18.dp else 14.dp
+
     TabRow(
         selectedTabIndex = selectedIndex,
         modifier = modifier
             .fillMaxWidth()
-            .height(36.dp),
+            .height(tabHeight),
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface
     ) {
@@ -79,7 +87,7 @@ fun TopNavigationBar(
                         restoreState = true
                     }
                 },
-                modifier = Modifier.height(36.dp),
+                modifier = Modifier.height(tabHeight),
                 selectedContentColor = MaterialTheme.colorScheme.primary,
                 unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
             ) {
@@ -90,7 +98,7 @@ fun TopNavigationBar(
                     Icon(
                         imageVector = route.icon,
                         contentDescription = null,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(iconSize)
                     )
                     Spacer(Modifier.width(2.dp))
                     Text(
