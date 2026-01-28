@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.view.WindowManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -31,6 +33,15 @@ fun UpdateScreen(
     val context = LocalContext.current
     val connectionState by viewModel.connectionState.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
+
+    // File picker for local firmware
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            viewModel.installFromFile(it, context)
+        }
+    }
 
     // Keep screen on during update
     val isUpdating = uiState.updateProgress.state != UpdateState.IDLE &&
@@ -177,7 +188,7 @@ fun UpdateScreen(
 
         // Install from file button
         OutlinedButton(
-            onClick = { /* TODO: File picker for local .bin */ },
+            onClick = { filePickerLauncher.launch("application/octet-stream") },
             modifier = Modifier.fillMaxWidth(),
             enabled = uiState.updateProgress.state == UpdateState.IDLE
         ) {

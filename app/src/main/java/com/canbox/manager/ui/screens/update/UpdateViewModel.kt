@@ -282,6 +282,45 @@ class UpdateViewModel(
         }
     }
 
+    fun installFromFile(uri: android.net.Uri, context: android.content.Context) {
+        viewModelScope.launch {
+            try {
+                _uiState.update {
+                    it.copy(
+                        updateProgress = UpdateProgress(
+                            state = UpdateState.PREPARING,
+                            message = "Reading firmware file..."
+                        )
+                    )
+                }
+
+                // Copy URI content to a temp file
+                val inputStream = context.contentResolver.openInputStream(uri)
+                    ?: throw Exception("Cannot open file")
+
+                val tempFile = File(context.cacheDir, "firmware_local.bin")
+                tempFile.outputStream().use { output ->
+                    inputStream.copyTo(output)
+                }
+                inputStream.close()
+
+                android.util.Log.d(TAG, "Loaded local firmware: ${tempFile.length()} bytes")
+                flashFirmware(tempFile)
+
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Failed to load firmware file", e)
+                _uiState.update {
+                    it.copy(
+                        updateProgress = UpdateProgress(
+                            state = UpdateState.ERROR,
+                            message = "Failed to load file: ${e.message}"
+                        )
+                    )
+                }
+            }
+        }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(error = null) }
     }

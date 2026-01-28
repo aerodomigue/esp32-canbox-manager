@@ -1,5 +1,7 @@
 package com.canbox.manager.ui.screens.canconfig
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -9,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.canbox.manager.domain.model.CanConfigFile
 import com.canbox.manager.domain.model.VehicleMode
@@ -20,8 +23,18 @@ import org.koin.androidx.compose.koinViewModel
 fun CanConfigScreen(
     viewModel: CanConfigViewModel = koinViewModel()
 ) {
+    val context = LocalContext.current
     val connectionState by viewModel.connectionState.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
+
+    // File picker for config import
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            viewModel.importFromFile(it, context)
+        }
+    }
 
     LaunchedEffect(connectionState.isConnected) {
         if (connectionState.isConnected) {
@@ -139,7 +152,7 @@ fun CanConfigScreen(
 
         // Import button
         OutlinedButton(
-            onClick = { /* TODO: File picker */ },
+            onClick = { filePickerLauncher.launch("*/*") },
             modifier = Modifier.fillMaxWidth()
         ) {
             Icon(Icons.Filled.Upload, contentDescription = null)

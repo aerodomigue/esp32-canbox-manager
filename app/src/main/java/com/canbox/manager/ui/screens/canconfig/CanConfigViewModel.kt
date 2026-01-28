@@ -96,6 +96,37 @@ class CanConfigViewModel(
         }
     }
 
+    fun importFromFile(uri: android.net.Uri, context: android.content.Context) {
+        viewModelScope.launch {
+            try {
+                _uiState.update { it.copy(isLoading = true, error = null) }
+
+                // Get filename from URI
+                val filename = uri.lastPathSegment?.substringAfterLast('/') ?: "config.json"
+
+                // Read content
+                val inputStream = context.contentResolver.openInputStream(uri)
+                    ?: throw Exception("Cannot open file")
+                val content = inputStream.readBytes()
+                inputStream.close()
+
+                // Upload to device
+                repository.uploadCanConfig(filename, content)
+                    .onSuccess { refresh() }
+                    .onFailure { error ->
+                        _uiState.update {
+                            it.copy(isLoading = false, error = error.message)
+                        }
+                    }
+
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, error = "Import failed: ${e.message}")
+                }
+            }
+        }
+    }
+
     fun clearError() {
         _uiState.update { it.copy(error = null) }
     }

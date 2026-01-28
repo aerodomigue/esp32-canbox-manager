@@ -183,7 +183,7 @@ private fun LiveDashboard(data: VehicleData) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.8f),
+                .weight(1f),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // Doors panel
@@ -230,8 +230,11 @@ private fun DoorStatusPanel(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 DoorIndicator("FL", doors.frontLeft)
                 DoorIndicator("FR", doors.frontRight)
@@ -246,11 +249,12 @@ private fun DoorStatusPanel(
 @Composable
 private fun DoorIndicator(label: String, isOpen: Boolean) {
     Column(
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(28.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(if (isOpen) IndicatorWarning else IndicatorOff)
                 .border(
@@ -263,15 +267,15 @@ private fun DoorIndicator(label: String, isOpen: Boolean) {
             Icon(
                 imageVector = if (isOpen) Icons.Filled.DoorFront else Icons.Filled.DoorFront,
                 contentDescription = null,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
                 tint = if (isOpen) Color.White else Color.Gray
             )
         }
-        Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (isOpen) IndicatorWarning else MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (isOpen) IndicatorWarning else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp)
         )
     }
 }
@@ -297,8 +301,11 @@ private fun LightStatusPanel(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 LightIndicator(Icons.Filled.LightMode, "Park", lights.parking)
                 LightIndicator(Icons.Filled.Light, "Low", lights.lowBeam)
@@ -318,11 +325,12 @@ private fun LightIndicator(
     onColor: Color = IndicatorOn
 ) {
     Column(
-        horizontalAlignment = Alignment.CenterHorizontally
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(28.dp)
                 .clip(CircleShape)
                 .background(if (isOn) onColor else IndicatorOff),
             contentAlignment = Alignment.Center
@@ -330,15 +338,15 @@ private fun LightIndicator(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
                 tint = if (isOn) Color.White else Color.Gray
             )
         }
-        Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (isOn) onColor else MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (isOn) onColor else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp)
         )
     }
 }
