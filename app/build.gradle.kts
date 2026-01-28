@@ -9,20 +9,41 @@ android {
     namespace = "com.canbox.manager"
     compileSdk = 35
 
+    signingConfigs {
+        // On configure le bloc 'debug' existant pour la compatibilité Junsun
+        getByName("debug") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+            enableV1Signing = true
+            enableV2Signing = true
+        }
+    }
+
     defaultConfig {
-        applicationId = "com.canbox.manager"
+        // Ton nouvel ID unique pour Aerodomigue
+        applicationId = "com.aerodomigue.canboxmanager"
+
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 34
         versionCode = 3
         versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            // Focus sur l'architecture Junsun
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            // On utilise la config de signature 'debug' qu'on a surchargée plus haut
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -30,6 +51,17 @@ android {
         }
         debug {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        jniLibs {
+            // Très important pour les drivers USB sur Rockchip
+            useLegacyPackaging = true
         }
     }
 
@@ -49,13 +81,11 @@ android {
 }
 
 dependencies {
-    // Core Android
+    // Garde tes dépendances actuelles ici (Core, Compose, Room, USB Serial, etc.)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
-
-    // Compose
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
@@ -63,31 +93,17 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
     debugImplementation(libs.androidx.ui.tooling)
-
-    // Navigation
     implementation(libs.androidx.navigation.compose)
-
-    // Room
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
-
-    // Koin (DI)
     implementation(libs.koin.android)
     implementation(libs.koin.androidx.compose)
-
-    // Networking
     implementation(libs.retrofit)
     implementation(libs.retrofit.converter.gson)
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
-
-    // Coroutines
     implementation(libs.kotlinx.coroutines.android)
-
-    // USB Serial
     implementation(libs.usb.serial)
-
-    // Serialization
     implementation(libs.kotlinx.serialization.json)
 }
