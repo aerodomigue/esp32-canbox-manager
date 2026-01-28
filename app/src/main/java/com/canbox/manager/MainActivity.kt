@@ -1,16 +1,20 @@
 package com.canbox.manager
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Bundle
-import android.view.View
-import android.view.WindowInsets
-import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -35,14 +39,20 @@ class MainActivity : ComponentActivity() {
 
     private val repository: CanBoxRepository by inject()
 
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> connectAsync()
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> repository.disconnect()
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // Enable full screen immersive mode
         hideSystemBars()
-
-        // Handle USB device attached intent
-        handleIntent(intent)
 
         setContent {
             CANBoxManagerTheme {
@@ -58,22 +68,31 @@ class MainActivity : ComponentActivity() {
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleIntent(intent)
-    }
-
-    private fun handleIntent(intent: Intent?) {
-        if (intent?.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
-            // Automatically connect when USB device is attached
-            repository.connect()
-        }
-    }
-
     override fun onResume() {
         super.onResume()
-        // Try to connect on resume
-        repository.connect()
+        // Register USB receiver for attach/detach while app is open
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(usbReceiver, filter)
+        }
+        // Try to connect on resume (async to not block UI)
+        connectAsync()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        unregisterReceiver(usbReceiver)
+    }
+
+    private fun connectAsync() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            repository.connect()
+        }
     }
 
     override fun onDestroy() {
@@ -91,7 +110,8 @@ fun MainScreen(repository: CanBoxRepository) {
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
-            .safeDrawingPadding(),
+            .navigationBarsPadding()
+            .displayCutoutPadding(),
         topBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 // Status bar

@@ -36,6 +36,9 @@ class UsbSerialManager(
     private var ioManager: SerialInputOutputManager? = null
     private val executor = Executors.newSingleThreadExecutor()
 
+    @Volatile
+    private var isConnecting = false
+
     private val _connectionState = MutableStateFlow<UsbConnectionState>(UsbConnectionState.Disconnected)
     val connectionState: StateFlow<UsbConnectionState> = _connectionState.asStateFlow()
 
@@ -49,19 +52,19 @@ class UsbSerialManager(
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 ACTION_USB_PERMISSION -> {
-                    synchronized(this) {
-                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                        }
-                        if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                            device?.let { connectToDevice(it) }
-                        } else {
-                            Log.w(TAG, "USB permission denied")
-                            _connectionState.value = UsbConnectionState.Error("Permission denied")
-                        }
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                    }
+                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                        Log.d(TAG, "USB permission granted")
+                        device?.let { connectToDevice(it) }
+                    } else {
+                        Log.w(TAG, "USB permission denied")
+                        isConnecting = false
+                        _connectionState.value = UsbConnectionState.Error("Permission denied")
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
@@ -78,7 +81,7 @@ class UsbSerialManager(
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            context.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             context.registerReceiver(usbReceiver, filter)
         }
@@ -88,7 +91,14 @@ class UsbSerialManager(
         return UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
     }
 
+    @Synchronized
     fun connect(): Boolean {
+        // Already connected or connecting
+        if (_connectionState.value.isConnected || isConnecting) {
+            Log.d(TAG, "Already connected or connecting, skipping")
+            return _connectionState.value.isConnected
+        }
+
         val drivers = findDevices()
         if (drivers.isEmpty()) {
             Log.d(TAG, "No USB serial devices found")
@@ -101,6 +111,7 @@ class UsbSerialManager(
 
         if (!usbManager.hasPermission(device)) {
             Log.d(TAG, "Requesting USB permission")
+            isConnecting = true
             _connectionState.value = UsbConnectionState.Connecting
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 PendingIntent.FLAG_MUTABLE
@@ -120,18 +131,35 @@ class UsbSerialManager(
         return connectToDevice(device)
     }
 
+    @Synchronized
     private fun connectToDevice(device: UsbDevice): Boolean {
+        // Already connected
+        if (_connectionState.value.isConnected) {
+            Log.d(TAG, "Already connected, skipping connectToDevice")
+            isConnecting = false
+            return true
+        }
+
+        isConnecting = true
         _connectionState.value = UsbConnectionState.Connecting
 
         try {
+            // Close any existing connection first
+            ioManager?.stop()
+            ioManager = null
+            try { serialPort?.close() } catch (e: Exception) { }
+            serialPort = null
+
             val drivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
             val driver = drivers.find { it.device == device } ?: run {
                 _connectionState.value = UsbConnectionState.Error("Driver not found")
+                isConnecting = false
                 return false
             }
 
             val connection = usbManager.openDevice(device) ?: run {
                 _connectionState.value = UsbConnectionState.Error("Could not open device")
+                isConnecting = false
                 return false
             }
 
@@ -160,17 +188,21 @@ class UsbSerialManager(
             )
 
             Log.d(TAG, "Connected to ${device.productName}")
+            isConnecting = false
             return true
 
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed", e)
             _connectionState.value = UsbConnectionState.Error(e.message ?: "Connection failed")
+            isConnecting = false
             disconnect()
             return false
         }
     }
 
+    @Synchronized
     fun disconnect() {
+        isConnecting = false
         ioManager?.listener = null
         ioManager?.stop()
         ioManager = null

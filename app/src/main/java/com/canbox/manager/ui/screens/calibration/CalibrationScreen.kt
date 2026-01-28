@@ -1,7 +1,10 @@
 package com.canbox.manager.ui.screens.calibration
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -9,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.canbox.manager.domain.model.CalibrationConfig
 import org.koin.androidx.compose.koinViewModel
@@ -83,110 +87,85 @@ fun CalibrationScreen(
             Spacer(Modifier.height(8.dp))
         }
 
-        // Settings content
-        Row(
+        // Settings content - single column
+        Column(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Left column: Steering
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
+            // Steering section
+            Text(
+                "Steering",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            CalibrationItem(
+                label = "Steering Offset",
+                value = uiState.config.steeringOffset,
+                range = CalibrationConfig.STEERING_OFFSET_RANGE,
+                onValueChange = { viewModel.updateSteeringOffset(it) }
+            )
+
+            CalibrationItem(
+                label = "Steering Scale (x0.01)",
+                value = uiState.config.steeringScale,
+                range = CalibrationConfig.STEERING_SCALE_RANGE,
+                onValueChange = { viewModel.updateSteeringScale(it) }
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        "Steering",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(Modifier.height(16.dp))
-
-                    CalibrationSlider(
-                        label = "Steering Offset",
-                        value = uiState.config.steeringOffset,
-                        range = CalibrationConfig.STEERING_OFFSET_RANGE,
-                        onValueChange = { viewModel.updateSteeringOffset(it) }
-                    )
-
-                    CalibrationSlider(
-                        label = "Steering Scale (x0.01)",
-                        value = uiState.config.steeringScale,
-                        range = CalibrationConfig.STEERING_SCALE_RANGE,
-                        onValueChange = { viewModel.updateSteeringScale(it) }
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Steering Invert")
-                        Switch(
-                            checked = uiState.config.steeringInvert,
-                            onCheckedChange = { viewModel.updateSteeringInvert(it) }
-                        )
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    CalibrationSlider(
-                        label = "Indicator Timeout (ms)",
-                        value = uiState.config.indicatorTimeout,
-                        range = CalibrationConfig.INDICATOR_TIMEOUT_RANGE,
-                        onValueChange = { viewModel.updateIndicatorTimeout(it) }
-                    )
-                }
+                Text("Steering Invert", style = MaterialTheme.typography.bodyMedium)
+                Switch(
+                    checked = uiState.config.steeringInvert,
+                    onCheckedChange = { viewModel.updateSteeringInvert(it) }
+                )
             }
 
-            // Right column: Engine & Fuel
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        "Engine & Fuel",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Spacer(Modifier.height(16.dp))
+            CalibrationItem(
+                label = "Indicator Timeout (ms)",
+                value = uiState.config.indicatorTimeout,
+                range = CalibrationConfig.INDICATOR_TIMEOUT_RANGE,
+                onValueChange = { viewModel.updateIndicatorTimeout(it) }
+            )
 
-                    CalibrationSlider(
-                        label = "RPM Divisor",
-                        value = uiState.config.rpmDivisor,
-                        range = CalibrationConfig.RPM_DIVISOR_RANGE,
-                        onValueChange = { viewModel.updateRpmDivisor(it) }
-                    )
+            Spacer(Modifier.height(8.dp))
 
-                    CalibrationSlider(
-                        label = "Tank Capacity (L)",
-                        value = uiState.config.tankCapacity,
-                        range = CalibrationConfig.TANK_CAPACITY_RANGE,
-                        onValueChange = { viewModel.updateTankCapacity(it) }
-                    )
+            // Engine & Fuel section
+            Text(
+                "Engine & Fuel",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
 
-                    CalibrationSlider(
-                        label = "DTE Divisor (x100)",
-                        value = uiState.config.dteDivisor,
-                        range = CalibrationConfig.DTE_DIVISOR_RANGE,
-                        onValueChange = { viewModel.updateDteDivisor(it) }
-                    )
-                }
-            }
+            CalibrationItem(
+                label = "RPM Divisor",
+                value = uiState.config.rpmDivisor,
+                range = CalibrationConfig.RPM_DIVISOR_RANGE,
+                onValueChange = { viewModel.updateRpmDivisor(it) }
+            )
+
+            CalibrationItem(
+                label = "Tank Capacity (L)",
+                value = uiState.config.tankCapacity,
+                range = CalibrationConfig.TANK_CAPACITY_RANGE,
+                onValueChange = { viewModel.updateTankCapacity(it) }
+            )
+
+            CalibrationItem(
+                label = "DTE Divisor (x100)",
+                value = uiState.config.dteDivisor,
+                range = CalibrationConfig.DTE_DIVISOR_RANGE,
+                onValueChange = { viewModel.updateDteDivisor(it) }
+            )
         }
 
         Spacer(Modifier.height(16.dp))
@@ -241,45 +220,104 @@ fun CalibrationScreen(
 }
 
 @Composable
-private fun CalibrationSlider(
+private fun CalibrationItem(
     label: String,
     value: Int,
     range: IntRange,
     onValueChange: (Int) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                value.toString(),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { onValueChange(it.toInt()) },
-            valueRange = range.first.toFloat()..range.last.toFloat(),
-            modifier = Modifier.fillMaxWidth()
+    var showEditDialog by remember { mutableStateOf(false) }
+    var editText by remember(value) { mutableStateOf(value.toString()) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
         ) {
-            Text(
-                range.first.toString(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+                // Clickable value for direct editing
+                Surface(
+                    modifier = Modifier.clickable { showEditDialog = true },
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = value.toString(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Slider(
+                value = value.toFloat(),
+                onValueChange = { onValueChange(it.toInt()) },
+                valueRange = range.first.toFloat()..range.last.toFloat(),
+                modifier = Modifier.fillMaxWidth()
             )
-            Text(
-                range.last.toString(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    range.first.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    range.last.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
-        Spacer(Modifier.height(8.dp))
+    }
+
+    // Edit dialog for precise input
+    if (showEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditDialog = false },
+            title = { Text(label) },
+            text = {
+                OutlinedTextField(
+                    value = editText,
+                    onValueChange = { editText = it },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    label = { Text("Value (${range.first} - ${range.last})") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val newValue = editText.toIntOrNull()
+                        if (newValue != null && newValue in range) {
+                            onValueChange(newValue)
+                        }
+                        showEditDialog = false
+                    }
+                ) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
