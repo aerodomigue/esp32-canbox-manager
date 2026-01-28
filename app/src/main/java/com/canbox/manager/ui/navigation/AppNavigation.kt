@@ -4,7 +4,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -53,22 +55,21 @@ fun TopNavigationBar(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
 
-    NavigationBar(
-        modifier = modifier,
-        containerColor = MaterialTheme.colorScheme.surface
-    ) {
-        NavRoute.items.forEach { route ->
-            val selected = currentDestination?.hierarchy?.any { it.route == route.route } == true
+    val selectedIndex = NavRoute.items.indexOfFirst { route ->
+        currentDestination?.hierarchy?.any { it.route == route.route } == true
+    }.coerceAtLeast(0)
 
-            NavigationBarItem(
-                icon = {
-                    Icon(
-                        imageVector = route.icon,
-                        contentDescription = route.title
-                    )
-                },
-                label = { Text(route.title) },
-                selected = selected,
+    TabRow(
+        selectedTabIndex = selectedIndex,
+        modifier = modifier
+            .fillMaxWidth()
+            .height(36.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface
+    ) {
+        NavRoute.items.forEachIndexed { index, route ->
+            Tab(
+                selected = index == selectedIndex,
                 onClick = {
                     navController.navigate(route.route) {
                         popUpTo(navController.graph.findStartDestination().id) {
@@ -78,12 +79,27 @@ fun TopNavigationBar(
                         restoreState = true
                     }
                 },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.primary,
-                    selectedTextColor = MaterialTheme.colorScheme.primary,
-                    indicatorColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            )
+                modifier = Modifier.height(36.dp),
+                selectedContentColor = MaterialTheme.colorScheme.primary,
+                unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = route.icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(2.dp))
+                    Text(
+                        text = route.title,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1
+                    )
+                }
+            }
         }
     }
 }

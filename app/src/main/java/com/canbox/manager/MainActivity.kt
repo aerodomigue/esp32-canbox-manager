@@ -3,9 +3,14 @@ package com.canbox.manager
 import android.content.Intent
 import android.hardware.usb.UsbManager
 import android.os.Bundle
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -32,7 +37,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+
+        // Enable full screen immersive mode
+        hideSystemBars()
 
         // Handle USB device attached intent
         handleIntent(intent)
@@ -42,6 +49,13 @@ class MainActivity : ComponentActivity() {
                 MainScreen(repository)
             }
         }
+    }
+
+    private fun hideSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.hide(WindowInsetsCompat.Type.statusBars())
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -75,12 +89,18 @@ fun MainScreen(repository: CanBoxRepository) {
     val connectionState by repository.connectionState.collectAsState()
 
     Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .safeDrawingPadding(),
         topBar = {
-            Column {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 // Status bar
                 StatusBar(connectionState)
                 // Navigation
-                TopNavigationBar(navController)
+                TopNavigationBar(
+                    navController = navController,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     ) { paddingValues ->
@@ -107,20 +127,20 @@ private fun StatusBar(connectionState: UsbConnectionState) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             // App title
             Text(
-                text = "CANBox Manager",
-                style = MaterialTheme.typography.titleMedium
+                text = "CANBox",
+                style = MaterialTheme.typography.titleSmall
             )
 
             // Connection status
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 when (connectionState) {
                     is UsbConnectionState.Connected -> {
@@ -128,22 +148,23 @@ private fun StatusBar(connectionState: UsbConnectionState) {
                             imageVector = Icons.Filled.Usb,
                             contentDescription = null,
                             tint = StatusConnected,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = connectionState.deviceName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = StatusConnected
+                            text = connectionState.deviceName.take(15),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = StatusConnected,
+                            maxLines = 1
                         )
                     }
                     is UsbConnectionState.Connecting -> {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
+                            modifier = Modifier.size(14.dp),
                             strokeWidth = 2.dp
                         )
                         Text(
-                            text = "Connecting...",
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = "...",
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -152,11 +173,11 @@ private fun StatusBar(connectionState: UsbConnectionState) {
                             imageVector = Icons.Filled.UsbOff,
                             contentDescription = null,
                             tint = StatusDisconnected,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                         Text(
                             text = "Error",
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             color = StatusDisconnected
                         )
                     }
@@ -165,11 +186,11 @@ private fun StatusBar(connectionState: UsbConnectionState) {
                             imageVector = Icons.Filled.UsbOff,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "Disconnected",
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = "No USB",
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }

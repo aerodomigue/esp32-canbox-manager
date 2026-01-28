@@ -1,7 +1,9 @@
 package com.canbox.manager.ui.screens.update
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -36,9 +38,9 @@ fun UpdateScreen(
             uiState.updateProgress.state != UpdateState.ERROR
 
     DisposableEffect(isUpdating) {
-        val activity = context as? ComponentActivity
-        if (isUpdating) {
-            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val activity = context.findActivity()
+        if (isUpdating && activity != null) {
+            activity.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             android.util.Log.d("UpdateScreen", "Keep screen on: enabled")
         }
         onDispose {
@@ -351,4 +353,18 @@ private fun InfoRow(label: String, value: String) {
             style = MaterialTheme.typography.bodyMedium
         )
     }
+}
+
+/**
+ * Find the Activity from a Context (handles wrapped contexts)
+ */
+private fun Context.findActivity(): Activity? {
+    var context = this
+    while (context is ContextWrapper) {
+        if (context is Activity) {
+            return context
+        }
+        context = context.baseContext
+    }
+    return null
 }
