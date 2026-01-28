@@ -12,7 +12,8 @@ data class VehicleData(
     val lights: LightStatus = LightStatus(),
     val handbrake: Boolean = false,
     val reverse: Boolean = false,
-    val mode: VehicleMode = VehicleMode.UNKNOWN
+    val mode: VehicleMode = VehicleMode.UNKNOWN,
+    val configFile: String? = null  // Active CAN config file
 )
 
 data class DoorStatus(

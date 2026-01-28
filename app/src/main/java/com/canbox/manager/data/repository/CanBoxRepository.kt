@@ -80,38 +80,66 @@ class CanBoxRepository(
     }
 
     suspend fun setCalibration(param: String, value: Int): Result<Unit> {
-        return usbManager.sendCommand("CFG SET $param $value").map {
-            if (!CommandParser.isSuccess(it)) {
-                throw Exception(CommandParser.getErrorMessage(it) ?: "Set failed")
-            }
-        }
+        return usbManager.sendCommand("CFG SET $param $value").fold(
+            onSuccess = { response ->
+                if (CommandParser.isSuccess(response)) {
+                    Result.success(Unit)
+                } else {
+                    Result.failure(Exception(CommandParser.getErrorMessage(response) ?: "Set failed"))
+                }
+            },
+            onFailure = { Result.failure(it) }
+        )
     }
 
     suspend fun saveCalibration(): Result<Unit> {
-        return usbManager.sendCommand("CFG SAVE").map {
-            if (!CommandParser.isSuccess(it)) {
-                throw Exception(CommandParser.getErrorMessage(it) ?: "Save failed")
-            }
-        }
+        return usbManager.sendCommand("CFG SAVE").fold(
+            onSuccess = { response ->
+                if (CommandParser.isSuccess(response)) {
+                    Result.success(Unit)
+                } else {
+                    Result.failure(Exception(CommandParser.getErrorMessage(response) ?: "Save failed"))
+                }
+            },
+            onFailure = { Result.failure(it) }
+        )
     }
 
     suspend fun resetCalibration(): Result<Unit> {
-        return usbManager.sendCommand("CFG RESET").map {
-            if (!CommandParser.isSuccess(it)) {
-                throw Exception(CommandParser.getErrorMessage(it) ?: "Reset failed")
-            }
-        }
+        return usbManager.sendCommand("CFG RESET").fold(
+            onSuccess = { response ->
+                if (CommandParser.isSuccess(response)) {
+                    Result.success(Unit)
+                } else {
+                    Result.failure(Exception(CommandParser.getErrorMessage(response) ?: "Reset failed"))
+                }
+            },
+            onFailure = { Result.failure(it) }
+        )
     }
 
     // CAN config commands
     suspend fun getCanStatus(): Result<CanConfigStatus> {
+        // Get status first
         val statusResult = usbManager.sendCommand("CAN STATUS")
+        if (statusResult.isFailure) {
+            return Result.failure(statusResult.exceptionOrNull() ?: Exception("CAN STATUS failed"))
+        }
+
+        val (activeConfig, mode) = CommandParser.parseCanStatus(statusResult.getOrThrow())
+
+        // Delay to let ESP32 finish processing
+        delay(200)
+
+        // Then get file list
         val listResult = usbManager.sendCommand("CAN LIST")
+        val files = if (listResult.isSuccess) {
+            CommandParser.parseCanList(listResult.getOrThrow())
+        } else {
+            emptyList()
+        }
 
-        return statusResult.mapCatching { statusResponse ->
-            val (activeConfig, mode) = CommandParser.parseCanStatus(statusResponse)
-            val files = listResult.getOrNull()?.let { CommandParser.parseCanList(it) } ?: emptyList()
-
+        return Result.success(
             CanConfigStatus(
                 activeConfig = activeConfig,
                 mode = mode,
@@ -119,7 +147,7 @@ class CanBoxRepository(
                     file.copy(isActive = file.filename == activeConfig)
                 }
             )
-        }
+        )
     }
 
     suspend fun loadCanConfig(filename: String): Result<Unit> {

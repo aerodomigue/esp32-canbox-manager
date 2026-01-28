@@ -230,13 +230,24 @@ class UsbSerialManager(
         val text = String(data)
         responseBuffer.append(text)
 
-        // Check for complete response (ends with OK, ERROR, or prompt)
+        // Check for complete response
         val response = responseBuffer.toString()
-        if (response.contains("OK\r\n") ||
+        val lines = response.lines()
+
+        // Response is complete when:
+        // - Contains OK or ERROR
+        // - Ends with a delimiter line (only = characters, at least 10)
+        // - Has a prompt "> "
+        val lastLine = lines.lastOrNull { it.isNotBlank() } ?: ""
+        val isDelimiterLine = lastLine.length >= 10 && lastLine.all { it == '=' }
+
+        val isComplete = response.contains("OK\r\n") ||
+            response.contains("OK\n") ||
             response.contains("ERROR") ||
             response.contains("\r\n> ") ||
-            response.endsWith("\r\n")) {
+            (isDelimiterLine && lines.size >= 2)  // Delimiter line at end with content before
 
+        if (isComplete) {
             val completeResponse = responseBuffer.toString().trim()
             responseBuffer.clear()
 

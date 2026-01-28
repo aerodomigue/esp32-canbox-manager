@@ -41,13 +41,14 @@ fun CanConfigScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
+                val modeText = if (uiState.activeConfig != null) {
+                    "${uiState.mode.name} (${uiState.activeConfig})"
+                } else {
+                    uiState.mode.name
+                }
                 Text(
-                    text = "Active: ${uiState.activeConfig ?: "None"}",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = "Mode: ${uiState.mode.name}",
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = modeText,
+                    style = MaterialTheme.typography.titleMedium,
                     color = when (uiState.mode) {
                         VehicleMode.REAL -> StatusConnected
                         VehicleMode.MOCK -> StatusWarning

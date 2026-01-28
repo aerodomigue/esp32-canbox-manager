@@ -54,20 +54,20 @@ object CommandParser {
 
     /**
      * Parse SYS DATA response for vehicle data
-     * Example response:
-     * RPM: 2500
-     * Speed: 60
-     * Voltage: 14.2
-     * Temp: 85
-     * Fuel: 30
-     * DTE: 350
-     * Steering: -150
-     * Doors: 0x01
-     * Lights: 0x04
-     * Handbrake: 0
-     * Reverse: 0
-     * Mode: REAL
-     * OK
+     * Example response from ESP32:
+     * === Live Vehicle Data ===
+     * Config:   MockDemo.json
+     * Mode:     MOCK (Mock Demo)
+     * RPM:      4300
+     * Speed:    4 km/h
+     * Steering: 2000
+     * Fuel:     30 L
+     * Battery:  13.8 V
+     * DTE:      350 km
+     * Temp:     87 C
+     * Doors:    0x00
+     * Lights:   H=1 P=0 HB=0 L=0 R=0
+     * =========================
      */
     fun parseSysData(response: String): VehicleData {
         val lines = response.lines()
@@ -79,31 +79,40 @@ object CommandParser {
         var dte = 0
         var steering = 0
         var doorsValue = 0
-        var lightsValue = 0
+        var lights = LightStatus()
         var handbrake = false
         var reverse = false
         var mode = VehicleMode.UNKNOWN
+        var configFile: String? = null
 
         for (line in lines) {
-            val parts = line.split(":").map { it.trim() }
-            if (parts.size != 2) continue
+            val colonIndex = line.indexOf(':')
+            if (colonIndex == -1) continue
 
-            when (parts[0]) {
-                "RPM" -> rpm = parts[1].toIntOrNull() ?: 0
-                "Speed" -> speed = parts[1].toIntOrNull() ?: 0
-                "Voltage" -> voltage = parts[1].toFloatOrNull() ?: 0f
-                "Temp" -> temperature = parts[1].toIntOrNull() ?: 0
-                "Fuel" -> fuelLevel = parts[1].toIntOrNull() ?: 0
-                "DTE" -> dte = parts[1].toIntOrNull() ?: 0
-                "Steering" -> steering = parts[1].toIntOrNull() ?: 0
-                "Doors" -> doorsValue = parseHexOrInt(parts[1])
-                "Lights" -> lightsValue = parseHexOrInt(parts[1])
-                "Handbrake" -> handbrake = parts[1] == "1"
-                "Reverse" -> reverse = parts[1] == "1"
-                "Mode" -> mode = when (parts[1].uppercase()) {
-                    "REAL" -> VehicleMode.REAL
-                    "MOCK" -> VehicleMode.MOCK
-                    else -> VehicleMode.UNKNOWN
+            val key = line.substring(0, colonIndex).trim()
+            val value = line.substring(colonIndex + 1).trim()
+
+            when (key) {
+                "Config" -> configFile = value.ifEmpty { null }
+                "RPM" -> rpm = extractFirstInt(value)
+                "Speed" -> speed = extractFirstInt(value)
+                "Voltage", "Battery" -> voltage = extractFirstFloat(value)
+                "Temp" -> temperature = extractFirstInt(value)
+                "Fuel" -> fuelLevel = extractFirstInt(value)
+                "DTE" -> dte = extractFirstInt(value)
+                "Steering" -> steering = extractFirstInt(value)
+                "Doors" -> doorsValue = parseHexOrInt(value)
+                "Lights" -> lights = parseLightsString(value)
+                "Handbrake" -> handbrake = value == "1"
+                "Reverse" -> reverse = value == "1"
+                "Mode" -> {
+                    // Extract first word only: "MOCK (Mock Demo)" -> "MOCK"
+                    val modeWord = value.split(" ", "(").first().trim().uppercase()
+                    mode = when (modeWord) {
+                        "REAL" -> VehicleMode.REAL
+                        "MOCK" -> VehicleMode.MOCK
+                        else -> VehicleMode.UNKNOWN
+                    }
                 }
             }
         }
@@ -117,24 +126,84 @@ object CommandParser {
             dte = dte,
             steering = steering,
             doors = parseDoorStatus(doorsValue),
-            lights = parseLightStatus(lightsValue),
+            lights = lights,
             handbrake = handbrake,
             reverse = reverse,
-            mode = mode
+            mode = mode,
+            configFile = configFile
+        )
+    }
+
+    /**
+     * Extract the first integer from a string like "4 km/h" or "30 L"
+     */
+    private fun extractFirstInt(value: String): Int {
+        return value.split(" ").firstOrNull()?.toIntOrNull() ?: 0
+    }
+
+    /**
+     * Extract the first float from a string like "13.8 V"
+     */
+    private fun extractFirstFloat(value: String): Float {
+        return value.split(" ").firstOrNull()?.toFloatOrNull() ?: 0f
+    }
+
+    /**
+     * Parse lights string format: "H=1 P=0 HB=0 L=0 R=0"
+     * H=Hazard, P=Parking, HB=HighBeam, L=Left, R=Right
+     * Also supports hex format: "0x04"
+     */
+    private fun parseLightsString(value: String): LightStatus {
+        // Check if it's hex format first
+        if (value.startsWith("0x") || value.startsWith("0X")) {
+            return parseLightStatus(parseHexOrInt(value))
+        }
+
+        // Parse key=value format: "H=1 P=0 HB=0 L=0 R=0"
+        val parts = value.split(" ")
+        var hazard = false
+        var parking = false
+        var highBeam = false
+        var lowBeam = false
+        var leftIndicator = false
+        var rightIndicator = false
+
+        for (part in parts) {
+            val kv = part.split("=")
+            if (kv.size != 2) continue
+            val isOn = kv[1] == "1"
+            when (kv[0]) {
+                "H" -> hazard = isOn
+                "P" -> parking = isOn
+                "HB" -> highBeam = isOn
+                "LB" -> lowBeam = isOn
+                "L" -> leftIndicator = isOn
+                "R" -> rightIndicator = isOn
+            }
+        }
+
+        return LightStatus(
+            parking = parking,
+            lowBeam = lowBeam,
+            highBeam = highBeam,
+            leftIndicator = leftIndicator,
+            rightIndicator = rightIndicator,
+            hazard = hazard
         )
     }
 
     /**
      * Parse CFG LIST response
-     * Example:
-     * steer_offset: 100
-     * steer_scale: 4
-     * steer_invert: 1
-     * indicator_timeout: 500
-     * rpm_divisor: 7
-     * tank_capacity: 45
-     * dte_divisor: 283
-     * OK
+     * Example from ESP32:
+     * === Current Configuration ===
+     * steerOffset  = 100    (center offset)
+     * steerInvert  = 1    (invert direction)
+     * steerScale   = 4    (scale x0.01)
+     * indTimeout   = 500    (indicator ms)
+     * rpmDiv       = 7    (RPM divisor)
+     * tankCap      = 45    (tank liters)
+     * dteDiv       = 283    (DTE divisor x100)
+     * =============================
      */
     fun parseCfgList(response: String): CalibrationConfig {
         val lines = response.lines()
@@ -147,17 +216,23 @@ object CommandParser {
         var dteDivisor = 283
 
         for (line in lines) {
-            val parts = line.split(":").map { it.trim() }
-            if (parts.size != 2) continue
+            // Parse format: "paramName = value (description)"
+            val equalsIndex = line.indexOf('=')
+            if (equalsIndex == -1) continue
 
-            when (parts[0]) {
-                "steer_offset" -> steeringOffset = parts[1].toIntOrNull() ?: 0
-                "steer_scale" -> steeringScale = parts[1].toIntOrNull() ?: 100
-                "steer_invert" -> steeringInvert = parts[1] == "1"
-                "indicator_timeout" -> indicatorTimeout = parts[1].toIntOrNull() ?: 500
-                "rpm_divisor" -> rpmDivisor = parts[1].toIntOrNull() ?: 7
-                "tank_capacity" -> tankCapacity = parts[1].toIntOrNull() ?: 45
-                "dte_divisor" -> dteDivisor = parts[1].toIntOrNull() ?: 283
+            val paramName = line.substring(0, equalsIndex).trim()
+            val valueAndDesc = line.substring(equalsIndex + 1).trim()
+            // Extract just the number before any description in parentheses
+            val valueStr = valueAndDesc.split(" ", "(").first().trim()
+
+            when (paramName) {
+                "steerOffset" -> steeringOffset = valueStr.toIntOrNull() ?: 0
+                "steerScale" -> steeringScale = valueStr.toIntOrNull() ?: 100
+                "steerInvert" -> steeringInvert = valueStr == "1"
+                "indTimeout" -> indicatorTimeout = valueStr.toIntOrNull() ?: 500
+                "rpmDiv" -> rpmDivisor = valueStr.toIntOrNull() ?: 7
+                "tankCap" -> tankCapacity = valueStr.toIntOrNull() ?: 45
+                "dteDiv" -> dteDivisor = valueStr.toIntOrNull() ?: 283
             }
         }
 
@@ -199,10 +274,14 @@ object CommandParser {
 
     /**
      * Parse CAN STATUS response
-     * Example:
-     * Active: NissanJukeF15.json
-     * Mode: REAL
-     * OK
+     * Example from ESP32:
+     * === CAN Configuration Status ===
+     * Config: MockDemo.json
+     * Mode: MOCK (simulated data)
+     * Profile: Mock Demo
+     * Frames processed: 0
+     * Unknown frames: 0
+     * ================================
      */
     fun parseCanStatus(response: String): Pair<String?, VehicleMode> {
         var activeConfig: String? = null
@@ -210,12 +289,23 @@ object CommandParser {
 
         for (line in response.lines()) {
             when {
-                line.startsWith("Active:") -> {
-                    val value = line.substringAfter("Active:").trim()
-                    activeConfig = if (value.isNotEmpty() && value != "none") value else null
+                // Config: has priority (contains the actual filename)
+                line.startsWith("Config:") -> {
+                    val value = line.substringAfter(":").trim()
+                    if (value.isNotEmpty() && value.lowercase() != "none") {
+                        activeConfig = value
+                    }
+                }
+                // Fallback to Active: or Profile: if Config: not present
+                (line.startsWith("Active:") || line.startsWith("Profile:")) && activeConfig == null -> {
+                    val value = line.substringAfter(":").trim()
+                    activeConfig = if (value.isNotEmpty() && value.lowercase() != "none") value else null
                 }
                 line.startsWith("Mode:") -> {
-                    mode = when (line.substringAfter("Mode:").trim().uppercase()) {
+                    // Extract first word only: "MOCK (simulated data)" -> "MOCK"
+                    val modeWord = line.substringAfter("Mode:").trim()
+                        .split(" ", "(").first().trim().uppercase()
+                    mode = when (modeWord) {
                         "REAL" -> VehicleMode.REAL
                         "MOCK" -> VehicleMode.MOCK
                         else -> VehicleMode.UNKNOWN
