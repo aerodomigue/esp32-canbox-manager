@@ -9,6 +9,9 @@ interface GitHubApi {
     @GET("repos/aerodomigue/esp32-canbox-nissan/releases")
     suspend fun getReleases(): List<GitHubReleaseDto>
 
+    @GET("repos/aerodomigue/esp32-canbox-manager/releases/latest")
+    suspend fun getAppLatestRelease(): GitHubReleaseDto
+
     @Streaming
     @GET
     suspend fun downloadFile(@Url url: String): okhttp3.ResponseBody

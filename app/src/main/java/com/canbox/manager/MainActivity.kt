@@ -15,17 +15,22 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.UsbOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.rememberNavController
+import com.canbox.manager.data.github.GitHubRepository
 import com.canbox.manager.data.repository.CanBoxRepository
 import com.canbox.manager.data.usb.UsbConnectionState
 import com.canbox.manager.ui.navigation.AppNavHost
@@ -34,6 +39,7 @@ import com.canbox.manager.ui.theme.CANBoxManagerTheme
 import com.canbox.manager.ui.theme.StatusConnected
 import com.canbox.manager.ui.theme.StatusDisconnected
 import org.koin.android.ext.android.inject
+import org.koin.compose.koinInject
 
 class MainActivity : ComponentActivity() {
 
@@ -106,6 +112,44 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(repository: CanBoxRepository) {
     val navController = rememberNavController()
     val connectionState by repository.connectionState.collectAsState()
+    var showAboutDialog by remember { mutableStateOf(false) }
+    val gitHubRepository: GitHubRepository = koinInject()
+
+    // Check for app updates on startup
+    var startupCheckDone by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        // Check app update
+        gitHubRepository.checkAppUpdate(BuildConfig.VERSION_NAME)
+            .onSuccess { updateVersion ->
+                if (updateVersion != null) {
+                    showAboutDialog = true
+                }
+            }
+        startupCheckDone = true
+    }
+
+    // Check for ESP firmware updates when connected
+    LaunchedEffect(connectionState.isConnected, startupCheckDone) {
+        if (connectionState.isConnected && startupCheckDone && !showAboutDialog) {
+            // Get current firmware version
+            repository.getSysInfo().onSuccess { firmwareInfo ->
+                val currentVersion = firmwareInfo.version.removePrefix("v")
+                // Get latest release
+                gitHubRepository.getReleases().onSuccess { releases ->
+                    val latest = releases.firstOrNull { !it.prerelease }
+                    if (latest != null) {
+                        val latestVersion = latest.tagName.removePrefix("v")
+                        if (isNewerVersion(latestVersion, currentVersion)) {
+                            navController.navigate("update") {
+                                popUpTo("live") { inclusive = false }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Scaffold(
         modifier = Modifier
@@ -115,7 +159,10 @@ fun MainScreen(repository: CanBoxRepository) {
         topBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 // Status bar
-                StatusBar(connectionState)
+                StatusBar(
+                    connectionState = connectionState,
+                    onTitleClick = { showAboutDialog = true }
+                )
                 // Navigation
                 TopNavigationBar(
                     navController = navController,
@@ -136,10 +183,17 @@ fun MainScreen(repository: CanBoxRepository) {
             )
         }
     }
+
+    if (showAboutDialog) {
+        AboutOverlay(onDismiss = { showAboutDialog = false })
+    }
 }
 
 @Composable
-private fun StatusBar(connectionState: UsbConnectionState) {
+private fun StatusBar(
+    connectionState: UsbConnectionState,
+    onTitleClick: () -> Unit
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainerLow
@@ -151,11 +205,23 @@ private fun StatusBar(connectionState: UsbConnectionState) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // App title
-            Text(
-                text = "CANBox",
-                style = MaterialTheme.typography.titleSmall
-            )
+            // App title (clickable for About)
+            Row(
+                modifier = Modifier.clickable { onTitleClick() },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "CANBox",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Icon(
+                    imageVector = Icons.Filled.Info,
+                    contentDescription = "About",
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             // Connection status
             Row(
@@ -218,4 +284,109 @@ private fun StatusBar(connectionState: UsbConnectionState) {
             }
         }
     }
+}
+
+@Composable
+private fun AboutOverlay(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val gitHubRepository: GitHubRepository = koinInject()
+
+    var updateAvailable by remember { mutableStateOf<String?>(null) }
+    var isChecking by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        gitHubRepository.checkAppUpdate(BuildConfig.VERSION_NAME)
+            .onSuccess { updateAvailable = it }
+        isChecking = false
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f))
+            .clickable(onClick = onDismiss),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .padding(32.dp)
+                .clickable(enabled = false, onClick = {}),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "CANBox Manager",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Text("v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                Text("by aerodomigue", color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                // Update status
+                when {
+                    isChecking -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Checking updates...", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    updateAvailable != null -> {
+                        Text(
+                            "Update available: $updateAvailable",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    else -> {
+                        Text(
+                            "Up to date",
+                            color = StatusConnected,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+                ) {
+                    TextButton(onClick = {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/aerodomigue/esp32-canbox-manager"))
+                        context.startActivity(intent)
+                    }) {
+                        Text("GitHub")
+                    }
+                    if (updateAvailable != null) {
+                        TextButton(onClick = {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/aerodomigue/esp32-canbox-manager/releases/latest"))
+                            context.startActivity(intent)
+                        }) {
+                            Text("Download")
+                        }
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text("OK")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun isNewerVersion(latest: String, current: String): Boolean {
+    val latestParts = latest.split(".").map { it.toIntOrNull() ?: 0 }
+    val currentParts = current.split(".").map { it.toIntOrNull() ?: 0 }
+
+    for (i in 0 until maxOf(latestParts.size, currentParts.size)) {
+        val l = latestParts.getOrElse(i) { 0 }
+        val c = currentParts.getOrElse(i) { 0 }
+        if (l > c) return true
+        if (l < c) return false
+    }
+    return false
 }

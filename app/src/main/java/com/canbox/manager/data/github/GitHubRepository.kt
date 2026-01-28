@@ -14,6 +14,44 @@ class GitHubRepository(
         private const val TAG = "GitHubRepository"
     }
 
+    /**
+     * Check if a newer version of the app is available
+     * Returns the latest version tag if update available, null otherwise
+     */
+    suspend fun checkAppUpdate(currentVersion: String): Result<String?> = withContext(Dispatchers.IO) {
+        try {
+            Log.d(TAG, "Checking for app updates, current version: $currentVersion")
+            val release = api.getAppLatestRelease()
+            val latestVersion = release.tagName.removePrefix("v")
+
+            Log.d(TAG, "Latest app version: $latestVersion")
+
+            if (isNewerVersion(latestVersion, currentVersion)) {
+                Log.d(TAG, "Update available: $latestVersion > $currentVersion")
+                Result.success(release.tagName)
+            } else {
+                Log.d(TAG, "No update available")
+                Result.success(null)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking app update", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun isNewerVersion(latest: String, current: String): Boolean {
+        val latestParts = latest.split(".").map { it.toIntOrNull() ?: 0 }
+        val currentParts = current.split(".").map { it.toIntOrNull() ?: 0 }
+
+        for (i in 0 until maxOf(latestParts.size, currentParts.size)) {
+            val l = latestParts.getOrElse(i) { 0 }
+            val c = currentParts.getOrElse(i) { 0 }
+            if (l > c) return true
+            if (l < c) return false
+        }
+        return false
+    }
+
     suspend fun getReleases(): Result<List<GitHubRelease>> = withContext(Dispatchers.IO) {
         try {
             Log.d(TAG, "Fetching releases...")
