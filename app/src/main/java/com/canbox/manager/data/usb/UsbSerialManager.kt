@@ -198,36 +198,205 @@ class UsbSerialManager(
                 // Send command with newline
                 val data = "$command\r\n".toByteArray()
                 port.write(data, WRITE_TIMEOUT_MS)
-                Log.d(TAG, "Sent: $command")
 
                 // Wait for response
                 val response = withTimeoutOrNull(timeoutMs) {
                     pendingResponseChannel?.receive()
-                } ?: return@withContext Result.failure(IOException("Command timeout"))
+                }
+
+                if (response == null) {
+                    val bufferContent = responseBuffer.toString()
+                    Log.e(TAG, "Command timeout: $command (buffer: $bufferContent)")
+                    pendingResponseChannel = null
+                    return@withContext Result.failure(IOException("Command timeout"))
+                }
 
                 pendingResponseChannel = null
                 Result.success(response)
 
             } catch (e: Exception) {
-                Log.e(TAG, "Send command failed", e)
+                Log.e(TAG, "Send command failed: $command", e)
                 pendingResponseChannel = null
                 Result.failure(e)
             }
         }
     }
 
+    private var writeCounter = 0
+
     fun write(data: ByteArray): Boolean {
         return try {
             serialPort?.write(data, WRITE_TIMEOUT_MS)
+            writeCounter++
+            if (writeCounter % 100 == 0) {
+                Log.d(TAG, "Write #$writeCounter: ${data.size} bytes")
+            }
             true
         } catch (e: IOException) {
-            Log.e(TAG, "Write failed", e)
+            Log.e(TAG, "Write #$writeCounter failed: ${e.message}")
             false
         }
     }
 
+    fun resetWriteCounter() {
+        writeCounter = 0
+    }
+
+    /**
+     * Send raw binary data (for OTA binary mode) and wait for JSON response
+     */
+    suspend fun sendBinaryData(data: ByteArray, timeoutMs: Long = 10000L): Result<String> {
+        val port = serialPort ?: return Result.failure(IOException("Not connected"))
+
+        return withContext(Dispatchers.IO) {
+            try {
+                // Clear any pending data
+                responseBuffer.clear()
+                pendingResponseChannel = Channel(1)
+
+                // Send raw binary data directly
+                port.write(data, WRITE_TIMEOUT_MS)
+                Log.d(TAG, "Sent binary: ${data.size} bytes (timeout=${timeoutMs}ms)")
+
+                // Wait for JSON response
+                val response = withTimeoutOrNull(timeoutMs) {
+                    pendingResponseChannel?.receive()
+                }
+
+                if (response == null) {
+                    val bufferContent = responseBuffer.toString()
+                    Log.e(TAG, "Binary data timeout! Buffer content (${bufferContent.length} chars): $bufferContent")
+                    pendingResponseChannel = null
+                    return@withContext Result.failure(IOException("Command timeout"))
+                }
+
+                Log.d(TAG, "Received response (${response.length} chars)")
+                pendingResponseChannel = null
+                Result.success(response)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Send binary data failed", e)
+                pendingResponseChannel = null
+                Result.failure(e)
+            }
+        }
+    }
+
+    /**
+     * Send binary chunk and wait for JSON ACK response (for OTA v2 chunk-ACK protocol).
+     * Used when ESP32 sends ACK after each chunk.
+     */
+    suspend fun sendBinaryAndWaitResponse(data: ByteArray, timeoutMs: Long = 5000L): Result<String> {
+        val port = serialPort ?: return Result.failure(IOException("Not connected"))
+
+        return withContext(Dispatchers.IO) {
+            try {
+                // Clear buffer and set up channel for response (synchronized with onNewData)
+                synchronized(this@UsbSerialManager) {
+                    responseBuffer.clear()
+                    pendingResponseChannel = Channel(1)
+                }
+
+                // Send raw binary chunk
+                port.write(data, WRITE_TIMEOUT_MS)
+                Log.d(TAG, "Chunk sent: ${data.size} bytes")
+
+                // Wait for JSON ACK from ESP32
+                val response = withTimeoutOrNull(timeoutMs) {
+                    pendingResponseChannel?.receive()
+                }
+
+                synchronized(this@UsbSerialManager) {
+                    pendingResponseChannel = null
+                }
+
+                if (response == null) {
+                    val bufferContent = synchronized(this@UsbSerialManager) { responseBuffer.toString() }
+                    Log.e(TAG, "Chunk ACK timeout! Buffer (${bufferContent.length} chars): $bufferContent")
+                    return@withContext Result.failure(IOException("Chunk ACK timeout"))
+                }
+
+                Log.d(TAG, "Chunk ACK received: ${response.take(100)}")
+                Result.success(response)
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Send chunk failed: ${e.message}")
+                synchronized(this@UsbSerialManager) {
+                    pendingResponseChannel = null
+                }
+                Result.failure(e)
+            }
+        }
+    }
+
+    /**
+     * Non-blocking read of any available data in buffer.
+     * Returns null if no complete response available.
+     */
+    @Synchronized
+    fun readAvailable(): String? {
+        val content = responseBuffer.toString()
+        if (content.isBlank()) return null
+
+        // Check if we have a complete JSON response
+        val jsonStart = content.indexOf('{')
+        val jsonEnd = content.lastIndexOf('}')
+        if (jsonStart != -1 && jsonEnd > jsonStart) {
+            try {
+                val json = content.substring(jsonStart, jsonEnd + 1)
+                // Clear the consumed part
+                responseBuffer.delete(0, minOf(jsonEnd + 1, responseBuffer.length))
+                return json
+            } catch (e: Exception) {
+                Log.e(TAG, "readAvailable error: ${e.message}")
+                return null
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Blocking wait for a response (used after OTA binary transfer completes)
+     */
+    suspend fun waitForResponse(timeoutMs: Long = 10000L): Result<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                // Set up channel for response
+                pendingResponseChannel = Channel(1)
+
+                Log.d(TAG, "Waiting for response (timeout=${timeoutMs}ms), buffer=${responseBuffer.length} chars")
+
+                // Wait for response
+                val response = withTimeoutOrNull(timeoutMs) {
+                    pendingResponseChannel?.receive()
+                }
+
+                pendingResponseChannel = null
+
+                if (response == null) {
+                    val bufferContent = responseBuffer.toString()
+                    Log.e(TAG, "Wait timeout! Buffer (${bufferContent.length} chars): $bufferContent")
+                    Result.failure(IOException("Response timeout"))
+                } else {
+                    Log.d(TAG, "Got response: ${response.take(200)}")
+                    Result.success(response)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Wait for response failed", e)
+                pendingResponseChannel = null
+                Result.failure(e)
+            }
+        }
+    }
+
+    @Synchronized
     override fun onNewData(data: ByteArray) {
         val text = String(data)
+        // Log raw data from ESP32
+        if (text.contains("{") || text.contains("status")) {
+            Log.d(TAG, "ESP32 raw: ${text.take(200)}")
+        }
         responseBuffer.append(text)
 
         // Check for complete response
@@ -235,21 +404,31 @@ class UsbSerialManager(
         val lines = response.lines()
 
         // Response is complete when:
-        // - Contains OK or ERROR
+        // - Contains OK or ERROR (with newline to avoid partial matches)
         // - Ends with a delimiter line (only = characters, at least 10)
         // - Has a prompt "> "
+        // - Contains a complete JSON response (for OTA v2)
         val lastLine = lines.lastOrNull { it.isNotBlank() } ?: ""
         val isDelimiterLine = lastLine.length >= 10 && lastLine.all { it == '=' }
 
-        val isComplete = response.contains("OK\r\n") ||
-            response.contains("OK\n") ||
-            response.contains("ERROR") ||
-            response.contains("\r\n> ") ||
-            (isDelimiterLine && lines.size >= 2)  // Delimiter line at end with content before
+        // For legacy OTA responses, look for OK at start of line or ERROR
+        val hasOkResponse = response.contains("\nOK") || response.startsWith("OK") ||
+            response.contains("\r\nOK")
+        val hasErrorResponse = response.contains("ERROR")
+        val hasPrompt = response.contains("\r\n> ") || response.contains("\n> ")
+
+        // For OTA v2 JSON responses: {"status":"ok",...} or {"status":"error",...}
+        val hasJsonResponse = (response.contains("{\"status\":\"ok\"") || response.contains("{\"status\":\"error\"")) &&
+            response.contains("}") && response.indexOf('}') > response.indexOf('{')
+
+        val isComplete = hasOkResponse || hasErrorResponse || hasPrompt || hasJsonResponse ||
+            (isDelimiterLine && lines.size >= 2)
 
         if (isComplete) {
             val completeResponse = responseBuffer.toString().trim()
             responseBuffer.clear()
+
+            Log.d(TAG, "Complete response: ${completeResponse.take(150)}")
 
             // Send to channel if waiting for response
             pendingResponseChannel?.trySend(completeResponse)

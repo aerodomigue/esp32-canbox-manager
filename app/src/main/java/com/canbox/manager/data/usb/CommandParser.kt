@@ -6,13 +6,14 @@ object CommandParser {
 
     /**
      * Parse SYS INFO response
-     * Example response:
-     * ESP32 CANBox v1.7.0
-     * Build: Jan 26 2026
-     * Chip: ESP32-S3
-     * Free heap: 123456
-     * Uptime: 12345s
-     * OK
+     * Example response from ESP32:
+     * === System Info ===
+     * Firmware: 1.7.0 (2026-01-26)
+     * Uptime: 20 sec
+     * Free heap: 285172 bytes
+     * CPU freq: 160 MHz
+     * Chip: ESP32-C3 rev4
+     * ===================
      */
     fun parseSysInfo(response: String): FirmwareInfo {
         val lines = response.lines()
@@ -24,21 +25,26 @@ object CommandParser {
 
         for (line in lines) {
             when {
-                line.startsWith("ESP32 CANBox v") -> {
-                    version = line.substringAfter("v").trim()
-                }
-                line.startsWith("Build:") -> {
-                    buildDate = line.substringAfter("Build:").trim()
+                line.startsWith("Firmware:") -> {
+                    // Parse "Firmware: 1.7.0 (2026-01-26)"
+                    val value = line.substringAfter("Firmware:").trim()
+                    version = value.substringBefore(" ").substringBefore("(").trim()
+                    if (value.contains("(") && value.contains(")")) {
+                        buildDate = value.substringAfter("(").substringBefore(")").trim()
+                    }
                 }
                 line.startsWith("Chip:") -> {
                     chipModel = line.substringAfter("Chip:").trim()
                 }
                 line.startsWith("Free heap:") -> {
-                    freeHeap = line.substringAfter("Free heap:").trim().toIntOrNull() ?: 0
+                    // Parse "Free heap: 285172 bytes"
+                    val value = line.substringAfter("Free heap:").trim()
+                    freeHeap = value.split(" ").firstOrNull()?.toIntOrNull() ?: 0
                 }
                 line.startsWith("Uptime:") -> {
-                    val uptimeStr = line.substringAfter("Uptime:").trim().removeSuffix("s")
-                    uptime = uptimeStr.toLongOrNull() ?: 0
+                    // Parse "Uptime: 20 sec"
+                    val value = line.substringAfter("Uptime:").trim()
+                    uptime = value.split(" ").firstOrNull()?.toLongOrNull() ?: 0
                 }
             }
         }

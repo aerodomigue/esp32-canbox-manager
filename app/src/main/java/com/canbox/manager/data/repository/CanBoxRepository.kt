@@ -10,6 +10,10 @@ import kotlinx.coroutines.flow.*
 class CanBoxRepository(
     private val usbManager: UsbSerialManager
 ) {
+    companion object {
+        private const val TAG = "CanBoxRepository"
+    }
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // Connection state
@@ -235,28 +239,102 @@ class CanBoxRepository(
         }
     }
 
-    suspend fun startOtaUpdate(size: Int, md5: String): Result<Unit> {
-        return usbManager.sendCommand("OTA START $size $md5").map {
-            if (!CommandParser.isSuccess(it)) {
-                throw Exception(CommandParser.getErrorMessage(it) ?: "OTA start failed")
+    // ========== OTA Protocol (Base64, text responses) ==========
+
+    /**
+     * Start OTA update session
+     * Response: "OK READY" or "ERROR: <message>"
+     */
+    suspend fun otaStart(size: Int, md5: String): Result<String> {
+        val cmd = "OTA START $size $md5"
+        android.util.Log.d(TAG, "OTA START - sending: $cmd")
+        return usbManager.sendCommand(cmd, timeoutMs = 10000).fold(
+            onSuccess = { response ->
+                android.util.Log.d(TAG, "OTA START - response: $response")
+                if (response.contains("OK") || response.contains("READY")) {
+                    Result.success(response)
+                } else {
+                    Result.failure(Exception(parseError(response)))
+                }
+            },
+            onFailure = { error ->
+                android.util.Log.e(TAG, "OTA START - failed: ${error.message}")
+                Result.failure(error)
             }
-        }
+        )
     }
 
-    suspend fun sendOtaData(data: ByteArray): Result<Unit> {
+    /**
+     * Send firmware data chunk (base64 encoded)
+     * Chunk size: 180 bytes binary = 240 chars base64
+     * Response: "OK <received>/<total> (<percent>%)" or "ERROR: <message>"
+     */
+    suspend fun otaSendData(data: ByteArray): Result<String> {
         val base64 = android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP)
-        return usbManager.sendCommand("OTA DATA $base64", timeoutMs = 5000).map {
-            if (!CommandParser.isSuccess(it)) {
-                throw Exception(CommandParser.getErrorMessage(it) ?: "OTA data failed")
+        return usbManager.sendCommand("OTA DATA $base64", timeoutMs = 10000).fold(
+            onSuccess = { response ->
+                if (response.contains("OK")) {
+                    Result.success(response)
+                } else {
+                    Result.failure(Exception(parseError(response)))
+                }
+            },
+            onFailure = { error ->
+                android.util.Log.e(TAG, "OTA DATA - failed: ${error.message}")
+                Result.failure(error)
             }
-        }
+        )
     }
 
-    suspend fun endOtaUpdate(): Result<Unit> {
-        return usbManager.sendCommand("OTA END", timeoutMs = 30000).map {
-            if (!CommandParser.isSuccess(it)) {
-                throw Exception(CommandParser.getErrorMessage(it) ?: "OTA end failed")
+    /**
+     * Finalize OTA update
+     * Response: "MD5 verified OK\nOK" or "ERROR: <message>"
+     * ESP32 reboots automatically after 2 seconds
+     */
+    suspend fun otaEnd(): Result<String> {
+        android.util.Log.d(TAG, "OTA END - sending")
+        return usbManager.sendCommand("OTA END", timeoutMs = 30000).fold(
+            onSuccess = { response ->
+                android.util.Log.d(TAG, "OTA END - response: $response")
+                if (response.contains("OK")) {
+                    Result.success(response)
+                } else {
+                    Result.failure(Exception(parseError(response)))
+                }
+            },
+            onFailure = { error ->
+                android.util.Log.e(TAG, "OTA END - failed: ${error.message}")
+                Result.failure(error)
             }
+        )
+    }
+
+    /**
+     * Abort OTA in progress
+     * Response: "OTA aborted"
+     */
+    suspend fun otaAbort(): Result<Unit> {
+        return usbManager.sendCommand("OTA ABORT", timeoutMs = 2000).fold(
+            onSuccess = { Result.success(Unit) },
+            onFailure = { Result.success(Unit) }  // Ignore errors
+        )
+    }
+
+    /**
+     * Get OTA status (for debugging)
+     */
+    suspend fun otaStatus(): Result<String> {
+        return usbManager.sendCommand("OTA STATUS", timeoutMs = 2000)
+    }
+
+    private fun parseError(response: String): String {
+        // Extract error message from "ERROR: <message>" format
+        val errorPrefix = "ERROR:"
+        val idx = response.indexOf(errorPrefix)
+        return if (idx >= 0) {
+            response.substring(idx + errorPrefix.length).trim()
+        } else {
+            response
         }
     }
 
