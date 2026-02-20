@@ -20,7 +20,8 @@ data class GitHubRelease(
         get() = tagName.removePrefix("v")
 
     val firmwareAsset: ReleaseAsset?
-        get() = assets.find { it.name.endsWith(".bin") }
+        get() = assets.find { it.name.endsWith(".ota") }
+            ?: assets.find { it.name == "firmware.bin" }
 }
 
 data class ReleaseAsset(

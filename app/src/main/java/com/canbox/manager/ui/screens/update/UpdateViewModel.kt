@@ -100,7 +100,8 @@ class UpdateViewModel(
                 )
             }
 
-            val targetFile = File(cacheDir, "firmware_${release.tagName}.bin")
+            val extension = if (firmwareAsset.name.endsWith(".ota")) "ota" else "bin"
+            val targetFile = File(cacheDir, "firmware_${release.tagName}.$extension")
 
             gitHubRepository.downloadFirmware(
                 url = firmwareAsset.downloadUrl,
