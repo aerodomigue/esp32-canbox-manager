@@ -1,5 +1,8 @@
 # ESP32 CANBox Manager
 
+> [!WARNING]
+> **Work in Progress**: This application is currently under active development. Due to limited time for exhaustive testing and completion, you may encounter bugs or unfinished features. Use with caution.
+
 Android companion app for configuring and monitoring the ESP32 CANBox (Nissan Juke F15 CAN bridge).
 
 ## Screenshots
