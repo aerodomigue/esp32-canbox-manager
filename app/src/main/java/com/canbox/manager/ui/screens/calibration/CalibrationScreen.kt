@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.canbox.manager.domain.model.CalibrationConfig
+import kotlin.math.roundToInt
 import org.koin.androidx.compose.koinViewModel
 
 @Composable
@@ -110,10 +111,11 @@ fun CalibrationScreen(
             )
 
             CalibrationItem(
-                label = "Steering Scale (x0.01)",
+                label = "Steering Scale",
                 value = uiState.config.steeringScale,
                 range = CalibrationConfig.STEERING_SCALE_RANGE,
-                onValueChange = { viewModel.updateSteeringScale(it) }
+                onValueChange = { viewModel.updateSteeringScale(it) },
+                displayDivisor = 100
             )
 
             Row(
@@ -224,10 +226,19 @@ private fun CalibrationItem(
     label: String,
     value: Int,
     range: IntRange,
-    onValueChange: (Int) -> Unit
+    onValueChange: (Int) -> Unit,
+    displayDivisor: Int = 1
 ) {
+    val isDecimal = displayDivisor > 1
+
+    fun formatDisplay(raw: Int): String =
+        if (isDecimal) "%.2f".format(raw.toFloat() / displayDivisor) else raw.toString()
+
+    fun formatRangeBound(raw: Int): String =
+        if (isDecimal) "%.2f".format(raw.toFloat() / displayDivisor) else raw.toString()
+
     var showEditDialog by remember { mutableStateOf(false) }
-    var editText by remember(value) { mutableStateOf(value.toString()) }
+    var editText by remember(value) { mutableStateOf(formatDisplay(value)) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -253,7 +264,7 @@ private fun CalibrationItem(
                     shape = RoundedCornerShape(4.dp)
                 ) {
                     Text(
-                        text = value.toString(),
+                        text = formatDisplay(value),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
@@ -272,12 +283,12 @@ private fun CalibrationItem(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    range.first.toString(),
+                    formatRangeBound(range.first),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    range.last.toString(),
+                    formatRangeBound(range.last),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -294,16 +305,24 @@ private fun CalibrationItem(
                 OutlinedTextField(
                     value = editText,
                     onValueChange = { editText = it },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (isDecimal) KeyboardType.Decimal else KeyboardType.Number
+                    ),
                     singleLine = true,
-                    label = { Text("Value (${range.first} - ${range.last})") },
+                    label = {
+                        Text("Value (${formatRangeBound(range.first)} - ${formatRangeBound(range.last)})")
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val newValue = editText.toIntOrNull()
+                        val newValue = if (isDecimal) {
+                            editText.toFloatOrNull()?.let { (it * displayDivisor).roundToInt() }
+                        } else {
+                            editText.toIntOrNull()
+                        }
                         if (newValue != null && newValue in range) {
                             onValueChange(newValue)
                         }
