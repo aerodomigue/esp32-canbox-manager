@@ -298,33 +298,51 @@ private fun CalibrationItem(
 
     // Edit dialog for precise input
     if (showEditDialog) {
+        fun parseInput(text: String): Int? {
+            val normalized = text.replace(',', '.')
+            return if (isDecimal) {
+                normalized.toFloatOrNull()?.let { (it * displayDivisor).roundToInt() }
+            } else {
+                normalized.toIntOrNull()
+            }
+        }
+
+        val parsedValue = parseInput(editText)
+        val isValid = parsedValue != null && parsedValue in range
+
         AlertDialog(
             onDismissRequest = { showEditDialog = false },
             title = { Text(label) },
             text = {
-                OutlinedTextField(
-                    value = editText,
-                    onValueChange = { editText = it },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = if (isDecimal) KeyboardType.Decimal else KeyboardType.Number
-                    ),
-                    singleLine = true,
-                    label = {
-                        Text("Value (${formatRangeBound(range.first)} - ${formatRangeBound(range.last)})")
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column {
+                    OutlinedTextField(
+                        value = editText,
+                        onValueChange = { editText = it },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = if (isDecimal) KeyboardType.Decimal else KeyboardType.Number
+                        ),
+                        singleLine = true,
+                        isError = editText.isNotEmpty() && !isValid,
+                        label = {
+                            Text("Value (${formatRangeBound(range.first)} - ${formatRangeBound(range.last)})")
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (editText.isNotEmpty() && !isValid) {
+                        Text(
+                            text = "Out of range: ${formatRangeBound(range.first)} – ${formatRangeBound(range.last)}",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val newValue = if (isDecimal) {
-                            editText.toFloatOrNull()?.let { (it * displayDivisor).roundToInt() }
-                        } else {
-                            editText.toIntOrNull()
-                        }
-                        if (newValue != null && newValue in range) {
-                            onValueChange(newValue)
+                        if (isValid) {
+                            onValueChange(parsedValue!!)
                         }
                         showEditDialog = false
                     }
