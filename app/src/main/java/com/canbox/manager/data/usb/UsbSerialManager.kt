@@ -431,7 +431,11 @@ class UsbSerialManager(
         }
         responseBuffer.append(text)
 
-        // Check for complete response
+        // Emit each incoming chunk immediately for streaming consumers (CAN log frames).
+        // parseCanFrame() filters out non-frame lines on the receiving end.
+        _receivedData.tryEmit(text)
+
+        // Check for complete command response
         val response = responseBuffer.toString()
         val lines = response.lines()
 
@@ -462,11 +466,8 @@ class UsbSerialManager(
 
             Log.d(TAG, "Complete response: ${completeResponse.take(150)}")
 
-            // Send to channel if waiting for response
+            // Deliver complete response to the waiting sendCommand() call
             pendingResponseChannel?.trySend(completeResponse)
-
-            // Also emit to flow for streaming data
-            _receivedData.tryEmit(completeResponse)
         }
     }
 
