@@ -106,4 +106,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.usb.serial)
     implementation(libs.kotlinx.serialization.json)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.0.0")
 }

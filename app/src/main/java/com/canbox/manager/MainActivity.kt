@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.rememberNavController
 import com.canbox.manager.data.github.GitHubRepository
 import com.canbox.manager.data.repository.CanBoxRepository
+import com.canbox.manager.util.isNewerVersion
 import com.canbox.manager.data.usb.UsbConnectionState
 import com.canbox.manager.ui.navigation.AppNavHost
 import com.canbox.manager.ui.navigation.TopNavigationBar
@@ -387,15 +388,3 @@ private fun AboutOverlay(onDismiss: () -> Unit) {
     }
 }
 
-private fun isNewerVersion(latest: String, current: String): Boolean {
-    val latestParts = latest.split(".").map { it.toIntOrNull() ?: 0 }
-    val currentParts = current.split(".").map { it.toIntOrNull() ?: 0 }
-
-    for (i in 0 until maxOf(latestParts.size, currentParts.size)) {
-        val l = latestParts.getOrElse(i) { 0 }
-        val c = currentParts.getOrElse(i) { 0 }
-        if (l > c) return true
-        if (l < c) return false
-    }
-    return false
-}
