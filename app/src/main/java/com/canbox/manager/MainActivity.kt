@@ -110,7 +110,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        repository.disconnect()
+        repository.release()
     }
 }
 
