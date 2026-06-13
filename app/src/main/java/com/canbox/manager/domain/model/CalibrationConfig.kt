@@ -20,11 +20,3 @@ data class CalibrationConfig(
     }
 }
 
-data class CalibrationParameter(
-    val key: String,
-    val displayName: String,
-    val value: Int,
-    val range: IntRange,
-    val unit: String = "",
-    val description: String = ""
-)
