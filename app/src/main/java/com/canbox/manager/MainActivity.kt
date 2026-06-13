@@ -120,6 +120,7 @@ fun MainScreen(repository: CanBoxRepository) {
     val navController = rememberNavController()
     val connectionState by repository.connectionState.collectAsState()
     var showAboutDialog by remember { mutableStateOf(false) }
+    var appUpdateVersion by remember { mutableStateOf<String?>(null) }
     val gitHubRepository: GitHubRepository = koinInject()
 
     // Check for app updates on startup
@@ -127,9 +128,9 @@ fun MainScreen(repository: CanBoxRepository) {
     var firmwareCheckDone by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        // Check app update once
         gitHubRepository.checkAppUpdate(BuildConfig.VERSION_NAME)
             .onSuccess { updateVersion ->
+                appUpdateVersion = updateVersion
                 if (updateVersion != null) {
                     showAboutDialog = true
                 }
@@ -194,7 +195,10 @@ fun MainScreen(repository: CanBoxRepository) {
     }
 
     if (showAboutDialog) {
-        AboutOverlay(onDismiss = { showAboutDialog = false })
+        AboutOverlay(
+            onDismiss = { showAboutDialog = false },
+            updateAvailable = appUpdateVersion
+        )
     }
 }
 
@@ -296,18 +300,9 @@ private fun StatusBar(
 }
 
 @Composable
-private fun AboutOverlay(onDismiss: () -> Unit) {
+private fun AboutOverlay(onDismiss: () -> Unit, updateAvailable: String?) {
     val context = LocalContext.current
-    val gitHubRepository: GitHubRepository = koinInject()
-
-    var updateAvailable by remember { mutableStateOf<String?>(null) }
-    var isChecking by remember { mutableStateOf(true) }
-
-    LaunchedEffect(Unit) {
-        gitHubRepository.checkAppUpdate(BuildConfig.VERSION_NAME)
-            .onSuccess { updateAvailable = it }
-        isChecking = false
-    }
+    val isChecking = false
 
     Box(
         modifier = Modifier
