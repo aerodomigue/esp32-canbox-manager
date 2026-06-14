@@ -52,8 +52,3 @@ enum class FrameSource {
     HEADUNIT
 }
 
-data class CanFilter(
-    val canId: Int,
-    val label: String,
-    val enabled: Boolean = true
-)
