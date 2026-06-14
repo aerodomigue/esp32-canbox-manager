@@ -364,12 +364,15 @@ object CommandParser {
     }
 
     private fun parseDoorStatus(value: Int): DoorStatus {
+        // Firmware bitmask (CanConfigProcessor.cpp, Toyota RAV4 format):
+        // DOOR_DRIVER=0x80, DOOR_PASSENGER=0x40, DOOR_REAR_LEFT=0x20,
+        // DOOR_REAR_RIGHT=0x10, DOOR_BOOT=0x08
         return DoorStatus(
-            frontLeft = (value and 0x01) != 0,
-            frontRight = (value and 0x02) != 0,
-            rearLeft = (value and 0x04) != 0,
-            rearRight = (value and 0x08) != 0,
-            trunk = (value and 0x10) != 0
+            frontLeft  = (value and 0x80) != 0,
+            frontRight = (value and 0x40) != 0,
+            rearLeft   = (value and 0x20) != 0,
+            rearRight  = (value and 0x10) != 0,
+            trunk      = (value and 0x08) != 0
         )
     }
 
