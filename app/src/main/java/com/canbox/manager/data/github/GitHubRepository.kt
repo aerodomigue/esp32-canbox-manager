@@ -3,6 +3,7 @@ package com.canbox.manager.data.github
 import android.util.Log
 import com.canbox.manager.domain.model.GitHubRelease
 import com.canbox.manager.domain.model.ReleaseAsset
+import com.canbox.manager.util.isNewerVersion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -43,19 +44,6 @@ class GitHubRepository(
             Log.e(TAG, "Error checking app update", e)
             Result.failure(e)
         }
-    }
-
-    private fun isNewerVersion(latest: String, current: String): Boolean {
-        val latestParts = latest.split(".").map { it.toIntOrNull() ?: 0 }
-        val currentParts = current.split(".").map { it.toIntOrNull() ?: 0 }
-
-        for (i in 0 until maxOf(latestParts.size, currentParts.size)) {
-            val l = latestParts.getOrElse(i) { 0 }
-            val c = currentParts.getOrElse(i) { 0 }
-            if (l > c) return true
-            if (l < c) return false
-        }
-        return false
     }
 
     suspend fun getReleases(): Result<List<GitHubRelease>> = withContext(Dispatchers.IO) {
