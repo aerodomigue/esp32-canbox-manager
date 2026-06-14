@@ -99,7 +99,7 @@ class CalibrationViewModel(
         }
     }
 
-    fun applyChanges() {
+    private fun applyChanges() {
         viewModelScope.launch {
             applyChangesInternal()
         }
