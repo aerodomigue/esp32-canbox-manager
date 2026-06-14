@@ -387,11 +387,11 @@ object CommandParser {
     }
 
     fun isSuccess(response: String): Boolean {
-        return response.contains("OK")
+        return response.lines().any { it.trim() == "OK" }
     }
 
     fun isError(response: String): Boolean {
-        return response.contains("ERROR")
+        return response.lines().any { it.trimStart().startsWith("ERROR") }
     }
 
     fun getErrorMessage(response: String): String? {
