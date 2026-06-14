@@ -265,7 +265,7 @@ private fun DoorIndicator(label: String, isOpen: Boolean) {
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = if (isOpen) Icons.Filled.DoorFront else Icons.Filled.DoorFront,
+                imageVector = if (isOpen) Icons.Filled.MeetingRoom else Icons.Filled.DoorFront,
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
                 tint = if (isOpen) Color.White else Color.Gray
