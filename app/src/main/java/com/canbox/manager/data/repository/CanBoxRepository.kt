@@ -193,12 +193,6 @@ class CanBoxRepository(
             kotlinx.coroutines.delay(10)
         }
 
-        // Verify all bytes sent
-        if (totalSent != content.size) {
-            usbManager.sendCommand("CAN UPLOAD ABORT")
-            return Result.failure(Exception("Upload incomplete: $totalSent/${content.size}"))
-        }
-
         // End upload
         return usbManager.sendCommand("CAN UPLOAD END", timeoutMs = 5000).map {
             if (!CommandParser.isSuccess(it)) {
