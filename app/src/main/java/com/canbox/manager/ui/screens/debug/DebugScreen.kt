@@ -44,9 +44,12 @@ fun DebugScreen(
     }
 
     fun requestSave() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+: requestLegacyExternalStorage ignored, no WRITE permission available
+            // Falls back to app-scoped external dir (no permission needed)
             viewModel.saveToFile(context)
         } else {
+            // Android 6-10: WRITE_EXTERNAL_STORAGE runtime permission required
             val permission = Manifest.permission.WRITE_EXTERNAL_STORAGE
             if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
                 viewModel.saveToFile(context)

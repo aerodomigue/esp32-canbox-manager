@@ -138,10 +138,12 @@ class DebugViewModel(
     }
 
     private fun getSaveDirectory(context: Context): File {
-        return if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            File(Environment.getExternalStorageDirectory(), LOG_DIR)
-        } else {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+: legacy storage not available, use app-scoped external dir
             File(context.getExternalFilesDir(null), LOG_DIR)
+        } else {
+            // Android 6-10: write to /sdcard/canbox/ via WRITE_EXTERNAL_STORAGE
+            File(Environment.getExternalStorageDirectory(), LOG_DIR)
         }
     }
 
