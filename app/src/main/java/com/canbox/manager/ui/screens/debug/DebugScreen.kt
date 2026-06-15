@@ -37,7 +37,7 @@ fun DebugScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            viewModel.saveToFile(context)
+            viewModel.saveToFile()
         } else {
             viewModel.setError("Storage permission denied — cannot save log file")
         }
@@ -45,14 +45,11 @@ fun DebugScreen(
 
     fun requestSave() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+: requestLegacyExternalStorage ignored, no WRITE permission available
-            // Falls back to app-scoped external dir (no permission needed)
-            viewModel.saveToFile(context)
+            viewModel.saveToFile()
         } else {
-            // Android 6-10: WRITE_EXTERNAL_STORAGE runtime permission required
             val permission = Manifest.permission.WRITE_EXTERNAL_STORAGE
             if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
-                viewModel.saveToFile(context)
+                viewModel.saveToFile()
             } else {
                 writePermissionLauncher.launch(permission)
             }
@@ -106,7 +103,7 @@ fun DebugScreen(
 
             IconButton(
                 onClick = { requestSave() },
-                enabled = uiState.frames.isNotEmpty()
+                enabled = uiState.totalFrames > 0
             ) {
                 Icon(Icons.Filled.Save, "Save to file")
             }

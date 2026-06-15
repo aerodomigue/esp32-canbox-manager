@@ -12,7 +12,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.BufferedWriter
 import java.io.File
+import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -26,13 +28,18 @@ data class DebugUiState(
 )
 
 class DebugViewModel(
-    private val repository: CanBoxRepository
+    private val repository: CanBoxRepository,
+    private val appContext: Context
 ) : ViewModel() {
 
     companion object {
-        private const val MAX_FRAMES = 500
+        private const val DISPLAY_FRAMES = 200
         private const val LOG_DIR = "canbox"
+        private const val TEMP_FILE_NAME = "canlog_tmp.txt"
     }
+
+    private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+    private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
 
     val connectionState: StateFlow<UsbConnectionState> = repository.connectionState
         .stateIn(
@@ -45,9 +52,22 @@ class DebugViewModel(
     val uiState: StateFlow<DebugUiState> = _uiState.asStateFlow()
 
     private var frameCollectionJob: kotlinx.coroutines.Job? = null
+    private var tempLogWriter: BufferedWriter? = null
+    private var tempLogFile: File? = null
 
     fun startLogging() {
         viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                val dir = getSaveDirectory()
+                dir.mkdirs()
+                val tempFile = File(dir, TEMP_FILE_NAME)
+                tempLogFile = tempFile
+                tempLogWriter = BufferedWriter(FileWriter(tempFile, false))
+                tempLogWriter?.write("# CANBox log\n")
+                tempLogWriter?.write("# Time              CAN_ID  DLC  Data\n")
+                tempLogWriter?.flush()
+            }
+
             repository.startCanLogging()
                 .onSuccess {
                     _uiState.update { it.copy(isLogging = true, isPaused = false) }
@@ -55,6 +75,7 @@ class DebugViewModel(
                 }
                 .onFailure { error ->
                     _uiState.update { it.copy(error = error.message) }
+                    withContext(Dispatchers.IO) { closeTempWriter() }
                 }
         }
     }
@@ -63,6 +84,7 @@ class DebugViewModel(
         viewModelScope.launch {
             frameCollectionJob?.cancel()
             repository.stopCanLogging()
+            withContext(Dispatchers.IO) { closeTempWriter() }
             _uiState.update { it.copy(isLogging = false) }
         }
     }
@@ -75,19 +97,6 @@ class DebugViewModel(
         _uiState.update { it.copy(frames = emptyList(), totalFrames = 0) }
     }
 
-    private fun collectFrames() {
-        frameCollectionJob = viewModelScope.launch {
-            repository.canFrames.collect { frame ->
-                if (!_uiState.value.isPaused) {
-                    _uiState.update { state ->
-                        val newFrames = (listOf(frame) + state.frames).take(MAX_FRAMES)
-                        state.copy(frames = newFrames, totalFrames = state.totalFrames + 1)
-                    }
-                }
-            }
-        }
-    }
-
     fun clearMessages() {
         _uiState.update { it.copy(error = null, savedPath = null) }
     }
@@ -96,16 +105,45 @@ class DebugViewModel(
         _uiState.update { it.copy(error = message) }
     }
 
-    fun saveToFile(context: Context) {
-        viewModelScope.launch {
-            val frames = _uiState.value.frames
-            if (frames.isEmpty()) {
-                _uiState.update { it.copy(error = "No frames to save") }
-                return@launch
-            }
+    private fun collectFrames() {
+        frameCollectionJob = viewModelScope.launch {
+            repository.canFrames.collect { frame ->
+                withContext(Dispatchers.IO) {
+                    tempLogWriter?.let { writer ->
+                        val time = timeFormat.format(Date(frame.timestamp))
+                        val id = "0x%03X".format(frame.canId)
+                        val data = frame.data.joinToString(" ") { "%02X".format(it) }
+                        writer.write("$time  $id  [${frame.dlc}]  $data\n")
+                        if (_uiState.value.totalFrames % 100 == 0L) writer.flush()
+                    }
+                }
 
+                _uiState.update { state ->
+                    val newFrames = if (!state.isPaused) {
+                        (listOf(frame) + state.frames).take(DISPLAY_FRAMES)
+                    } else {
+                        state.frames
+                    }
+                    state.copy(frames = newFrames, totalFrames = state.totalFrames + 1)
+                }
+            }
+        }
+    }
+
+    fun saveToFile() {
+        viewModelScope.launch {
             try {
-                val file = withContext(Dispatchers.IO) { createLogFile(context, frames) }
+                val file = withContext(Dispatchers.IO) {
+                    tempLogWriter?.flush()
+                    val tempFile = tempLogFile
+                        ?: throw Exception("No log — start logging first")
+                    if (!tempFile.exists() || tempFile.length() == 0L) {
+                        throw Exception("No frames to save")
+                    }
+                    val finalFile = File(getSaveDirectory(), "canlog_${dateFormat.format(Date())}.txt")
+                    tempFile.copyTo(finalFile, overwrite = true)
+                    finalFile
+                }
                 _uiState.update { it.copy(savedPath = file.absolutePath) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Save failed: ${e.message}") }
@@ -113,44 +151,24 @@ class DebugViewModel(
         }
     }
 
-    private fun createLogFile(context: Context, frames: List<CanFrame>): File {
-        val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-        val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
-        val filename = "canlog_${dateFormat.format(Date())}.txt"
-
-        val saveDir = getSaveDirectory(context)
-        saveDir.mkdirs()
-        val file = File(saveDir, filename)
-
-        file.bufferedWriter().use { writer ->
-            writer.write("# CANBox log - ${Date()}\n")
-            writer.write("# Time              Dir  CAN_ID  DLC  Data\n")
-            frames.reversed().forEach { frame ->
-                val time = timeFormat.format(Date(frame.timestamp))
-                val dir = frame.direction.name
-                val id = "0x%03X".format(frame.canId)
-                val data = frame.data.joinToString(" ") { "%02X".format(it) }
-                writer.write("$time  $dir  $id  [${frame.dlc}]  $data\n")
-            }
-        }
-
-        return file
-    }
-
-    private fun getSaveDirectory(context: Context): File {
+    private fun getSaveDirectory(): File {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+: legacy storage not available, use app-scoped external dir
-            File(context.getExternalFilesDir(null), LOG_DIR)
+            File(appContext.getExternalFilesDir(null), LOG_DIR)
         } else {
-            // Android 6-10: write to /sdcard/canbox/ via WRITE_EXTERNAL_STORAGE
             File(Environment.getExternalStorageDirectory(), LOG_DIR)
         }
+    }
+
+    private fun closeTempWriter() {
+        try { tempLogWriter?.close() } catch (_: Exception) {}
+        tempLogWriter = null
     }
 
     override fun onCleared() {
         super.onCleared()
         viewModelScope.launch {
             repository.stopCanLogging()
+            withContext(Dispatchers.IO) { closeTempWriter() }
         }
     }
 }

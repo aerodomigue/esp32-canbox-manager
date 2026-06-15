@@ -52,5 +52,5 @@ val appModule = module {
     viewModel { CanConfigViewModel(get(), get()) }
     viewModel { CalibrationViewModel(get()) }
     viewModel { UpdateViewModel(get(), get()) }
-    viewModel { DebugViewModel(get()) }
+    viewModel { DebugViewModel(get(), androidContext()) }
 }
