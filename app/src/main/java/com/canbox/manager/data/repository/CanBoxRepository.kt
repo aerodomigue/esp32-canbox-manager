@@ -347,4 +347,5 @@ class CanBoxRepository(
         scope.cancel()
         usbManager.release()
     }
+
 }

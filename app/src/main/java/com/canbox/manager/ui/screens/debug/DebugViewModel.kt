@@ -9,6 +9,8 @@ import com.canbox.manager.data.repository.CanBoxRepository
 import com.canbox.manager.data.usb.UsbConnectionState
 import com.canbox.manager.domain.model.CanFrame
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -149,8 +151,9 @@ class DebugViewModel(
                     }
                 }
             } finally {
-                // Ensure final flush if job is cancelled mid-write
-                withContext(Dispatchers.IO) {
+                // NonCancellable: withContext in a cancelled coroutine throws CancellationException
+                // without it — this flush would never execute on job cancellation
+                withContext(NonCancellable + Dispatchers.IO) {
                     writerMutex.withLock { tempLogWriter?.flush() }
                 }
             }
@@ -160,16 +163,12 @@ class DebugViewModel(
     fun saveToFile() {
         viewModelScope.launch {
             try {
-                val wasLogging = _uiState.value.isLogging
-
-                // Pause collection while copying to avoid a partial snapshot
-                frameCollectionJob?.cancel()
-                frameCollectionJob?.join()
-
                 val file = withContext(Dispatchers.IO) {
-                    writerMutex.withLock {
-                        tempLogWriter?.flush()
-                    }
+                    // Flush buffered data before copying — no need to stop collection,
+                    // the OS guarantees reads see all flushed bytes; one or two frames
+                    // written during the copy is acceptable for a log file
+                    writerMutex.withLock { tempLogWriter?.flush() }
+
                     val tempFile = tempLogFile
                         ?: throw Exception("No log — start logging first")
                     if (!tempFile.exists() || tempFile.length() == 0L) {
@@ -179,12 +178,7 @@ class DebugViewModel(
                     tempFile.copyTo(finalFile, overwrite = true)
                     finalFile
                 }
-
                 _uiState.update { it.copy(savedPath = file.absolutePath) }
-
-                // Resume collection if we were logging
-                if (wasLogging) collectFrames()
-
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Save failed: ${e.message}") }
             }
@@ -210,10 +204,15 @@ class DebugViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        // viewModelScope is already cancelled here — close synchronously
+        // viewModelScope is already cancelled here — use runBlocking to honour the mutex
+        // (the finally block in collectFrames may still hold it briefly)
         frameCollectionJob?.cancel()
-        try { tempLogWriter?.flush() } catch (_: Exception) {}
-        try { tempLogWriter?.close() } catch (_: Exception) {}
-        tempLogWriter = null
+        runBlocking {
+            writerMutex.withLock {
+                try { tempLogWriter?.flush() } catch (_: Exception) {}
+                try { tempLogWriter?.close() } catch (_: Exception) {}
+                tempLogWriter = null
+            }
+        }
     }
 }
