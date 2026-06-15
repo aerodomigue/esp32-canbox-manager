@@ -11,8 +11,14 @@ import com.canbox.manager.domain.model.CanFrame
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.BufferedWriter
 import java.io.File
+import java.io.FileWriter
+import java.text.SimpleDateFormat
+import java.util.*
 
 data class DebugUiState(
     val isLogging: Boolean = false,
@@ -25,21 +31,18 @@ data class DebugUiState(
 
 class DebugViewModel(
     private val repository: CanBoxRepository,
-    private val appContext: Context,
-    private val dirProvider: () -> File = { defaultLogDir(appContext) }
+    private val appContext: Context
 ) : ViewModel() {
 
     companion object {
-        internal const val DISPLAY_FRAMES = 200
+        private const val DISPLAY_FRAMES = 200
         private const val LOG_DIR = "canbox"
-
-        internal fun defaultLogDir(context: Context): File =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                File(context.getExternalFilesDir(null), LOG_DIR)
-            } else {
-                File(Environment.getExternalStorageDirectory(), LOG_DIR)
-            }
+        private const val TEMP_FILE_NAME = "canlog_tmp.txt"
+        private const val FLUSH_EVERY_N_FRAMES = 100
     }
+
+    private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
+    private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
 
     val connectionState: StateFlow<UsbConnectionState> = repository.connectionState
         .stateIn(
@@ -52,12 +55,31 @@ class DebugViewModel(
     val uiState: StateFlow<DebugUiState> = _uiState.asStateFlow()
 
     private var frameCollectionJob: kotlinx.coroutines.Job? = null
-    private var logFileManager: LogFileManager? = null
+    private var tempLogFile: File? = null
+
+    // Guards all access to tempLogWriter — prevents close-while-writing race
+    private val writerMutex = Mutex()
+    private var tempLogWriter: BufferedWriter? = null
+
+    // Separate counter for file writes, unaffected by clearFrames()
+    private var framesWrittenToFile = 0L
 
     fun startLogging() {
+        if (_uiState.value.isLogging) return
+
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                logFileManager = LogFileManager(dirProvider()).also { it.open() }
+                val dir = getSaveDirectory()
+                dir.mkdirs()
+                val tempFile = File(dir, TEMP_FILE_NAME)
+                tempLogFile = tempFile
+                framesWrittenToFile = 0L
+                writerMutex.withLock {
+                    tempLogWriter = BufferedWriter(FileWriter(tempFile, false))
+                    tempLogWriter?.write("# CANBox log\n")
+                    tempLogWriter?.write("# Time              CAN_ID  DLC  Data\n")
+                    tempLogWriter?.flush()
+                }
             }
 
             repository.startCanLogging()
@@ -67,7 +89,7 @@ class DebugViewModel(
                 }
                 .onFailure { error ->
                     _uiState.update { it.copy(error = error.message) }
-                    withContext(Dispatchers.IO) { logFileManager?.close() }
+                    withContext(Dispatchers.IO) { closeWriterLocked() }
                 }
         }
     }
@@ -75,8 +97,9 @@ class DebugViewModel(
     fun stopLogging() {
         viewModelScope.launch {
             frameCollectionJob?.cancel()
+            frameCollectionJob?.join()
             repository.stopCanLogging()
-            withContext(Dispatchers.IO) { logFileManager?.close() }
+            withContext(Dispatchers.IO) { closeWriterLocked() }
             _uiState.update { it.copy(isLogging = false) }
         }
     }
@@ -86,7 +109,7 @@ class DebugViewModel(
     }
 
     fun clearFrames() {
-        _uiState.update { it.copy(frames = emptyList(), totalFrames = 0) }
+        _uiState.update { it.copy(frames = emptyList()) }
     }
 
     fun clearMessages() {
@@ -99,16 +122,36 @@ class DebugViewModel(
 
     private fun collectFrames() {
         frameCollectionJob = viewModelScope.launch {
-            repository.canFrames.collect { frame ->
-                withContext(Dispatchers.IO) { logFileManager?.writeFrame(frame) }
-
-                _uiState.update { state ->
-                    val newFrames = if (!state.isPaused) {
-                        (listOf(frame) + state.frames).take(DISPLAY_FRAMES)
-                    } else {
-                        state.frames
+            try {
+                repository.canFrames.collect { frame ->
+                    withContext(Dispatchers.IO) {
+                        writerMutex.withLock {
+                            tempLogWriter?.let { writer ->
+                                val time = timeFormat.format(Date(frame.timestamp))
+                                val id = "0x%03X".format(frame.canId)
+                                val data = frame.data.joinToString(" ") { "%02X".format(it) }
+                                writer.write("$time  $id  [${frame.dlc}]  $data\n")
+                                framesWrittenToFile++
+                                if (framesWrittenToFile % FLUSH_EVERY_N_FRAMES == 0L) {
+                                    writer.flush()
+                                }
+                            }
+                        }
                     }
-                    state.copy(frames = newFrames, totalFrames = state.totalFrames + 1)
+
+                    _uiState.update { state ->
+                        val newFrames = if (!state.isPaused) {
+                            (listOf(frame) + state.frames).take(DISPLAY_FRAMES)
+                        } else {
+                            state.frames
+                        }
+                        state.copy(frames = newFrames, totalFrames = state.totalFrames + 1)
+                    }
+                }
+            } finally {
+                // Ensure final flush if job is cancelled mid-write
+                withContext(Dispatchers.IO) {
+                    writerMutex.withLock { tempLogWriter?.flush() }
                 }
             }
         }
@@ -117,21 +160,60 @@ class DebugViewModel(
     fun saveToFile() {
         viewModelScope.launch {
             try {
+                val wasLogging = _uiState.value.isLogging
+
+                // Pause collection while copying to avoid a partial snapshot
+                frameCollectionJob?.cancel()
+                frameCollectionJob?.join()
+
                 val file = withContext(Dispatchers.IO) {
-                    logFileManager?.save() ?: throw IllegalStateException("No log — start logging first")
+                    writerMutex.withLock {
+                        tempLogWriter?.flush()
+                    }
+                    val tempFile = tempLogFile
+                        ?: throw Exception("No log — start logging first")
+                    if (!tempFile.exists() || tempFile.length() == 0L) {
+                        throw Exception("No frames to save")
+                    }
+                    val finalFile = File(getSaveDirectory(), "canlog_${dateFormat.format(Date())}.txt")
+                    tempFile.copyTo(finalFile, overwrite = true)
+                    finalFile
                 }
+
                 _uiState.update { it.copy(savedPath = file.absolutePath) }
+
+                // Resume collection if we were logging
+                if (wasLogging) collectFrames()
+
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Save failed: ${e.message}") }
             }
         }
     }
 
+    private fun getSaveDirectory(): File {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            File(appContext.getExternalFilesDir(null), LOG_DIR)
+        } else {
+            File(Environment.getExternalStorageDirectory(), LOG_DIR)
+        }
+    }
+
+    // Must be called inside withContext(Dispatchers.IO)
+    private suspend fun closeWriterLocked() {
+        writerMutex.withLock {
+            try { tempLogWriter?.flush() } catch (_: Exception) {}
+            try { tempLogWriter?.close() } catch (_: Exception) {}
+            tempLogWriter = null
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
-        viewModelScope.launch {
-            repository.stopCanLogging()
-            withContext(Dispatchers.IO) { logFileManager?.close() }
-        }
+        // viewModelScope is already cancelled here — close synchronously
+        frameCollectionJob?.cancel()
+        try { tempLogWriter?.flush() } catch (_: Exception) {}
+        try { tempLogWriter?.close() } catch (_: Exception) {}
+        tempLogWriter = null
     }
 }
