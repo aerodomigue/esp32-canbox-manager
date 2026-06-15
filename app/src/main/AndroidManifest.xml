@@ -10,9 +10,11 @@
     <!-- Internet for GitHub API -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Storage for log files export -->
+    <!-- Storage for log files export (API <= 28 needs runtime grant) -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28"
+        android:maxSdkVersion="32"
         tools:ignore="ScopedStorage" />
 
     <application

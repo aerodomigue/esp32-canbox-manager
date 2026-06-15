@@ -1,6 +1,7 @@
 package com.canbox.manager.ui.screens.debug
 
 import android.content.Context
+import android.os.Build
 import android.os.Environment
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -91,6 +92,10 @@ class DebugViewModel(
         _uiState.update { it.copy(error = null, savedPath = null) }
     }
 
+    fun setError(message: String) {
+        _uiState.update { it.copy(error = message) }
+    }
+
     fun saveToFile(context: Context) {
         viewModelScope.launch {
             val frames = _uiState.value.frames
@@ -133,9 +138,8 @@ class DebugViewModel(
     }
 
     private fun getSaveDirectory(context: Context): File {
-        val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        return if (downloads != null && downloads.exists()) {
-            File(downloads, LOG_DIR)
+        return if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            File(Environment.getExternalStorageDirectory(), LOG_DIR)
         } else {
             File(context.getExternalFilesDir(null), LOG_DIR)
         }

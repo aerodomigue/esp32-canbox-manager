@@ -1,5 +1,10 @@
 package com.canbox.manager.ui.screens.debug
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.canbox.manager.domain.model.CanFrame
 import org.koin.androidx.compose.koinViewModel
 import java.text.SimpleDateFormat
@@ -26,6 +32,29 @@ fun DebugScreen(
     val context = LocalContext.current
     val connectionState by viewModel.connectionState.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
+
+    val writePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.saveToFile(context)
+        } else {
+            viewModel.setError("Storage permission denied — cannot save log file")
+        }
+    }
+
+    fun requestSave() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            viewModel.saveToFile(context)
+        } else {
+            val permission = Manifest.permission.WRITE_EXTERNAL_STORAGE
+            if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
+                viewModel.saveToFile(context)
+            } else {
+                writePermissionLauncher.launch(permission)
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -73,7 +102,7 @@ fun DebugScreen(
             }
 
             IconButton(
-                onClick = { viewModel.saveToFile(context) },
+                onClick = { requestSave() },
                 enabled = uiState.frames.isNotEmpty()
             ) {
                 Icon(Icons.Filled.Save, "Save to file")
