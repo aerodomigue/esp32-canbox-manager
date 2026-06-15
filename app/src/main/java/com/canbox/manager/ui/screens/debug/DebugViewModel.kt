@@ -12,11 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.BufferedWriter
 import java.io.File
-import java.io.FileWriter
-import java.text.SimpleDateFormat
-import java.util.*
 
 data class DebugUiState(
     val isLogging: Boolean = false,
@@ -29,17 +25,21 @@ data class DebugUiState(
 
 class DebugViewModel(
     private val repository: CanBoxRepository,
-    private val appContext: Context
+    private val appContext: Context,
+    private val dirProvider: () -> File = { defaultLogDir(appContext) }
 ) : ViewModel() {
 
     companion object {
-        private const val DISPLAY_FRAMES = 200
+        internal const val DISPLAY_FRAMES = 200
         private const val LOG_DIR = "canbox"
-        private const val TEMP_FILE_NAME = "canlog_tmp.txt"
-    }
 
-    private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
-    private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+        internal fun defaultLogDir(context: Context): File =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                File(context.getExternalFilesDir(null), LOG_DIR)
+            } else {
+                File(Environment.getExternalStorageDirectory(), LOG_DIR)
+            }
+    }
 
     val connectionState: StateFlow<UsbConnectionState> = repository.connectionState
         .stateIn(
@@ -52,20 +52,12 @@ class DebugViewModel(
     val uiState: StateFlow<DebugUiState> = _uiState.asStateFlow()
 
     private var frameCollectionJob: kotlinx.coroutines.Job? = null
-    private var tempLogWriter: BufferedWriter? = null
-    private var tempLogFile: File? = null
+    private var logFileManager: LogFileManager? = null
 
     fun startLogging() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                val dir = getSaveDirectory()
-                dir.mkdirs()
-                val tempFile = File(dir, TEMP_FILE_NAME)
-                tempLogFile = tempFile
-                tempLogWriter = BufferedWriter(FileWriter(tempFile, false))
-                tempLogWriter?.write("# CANBox log\n")
-                tempLogWriter?.write("# Time              CAN_ID  DLC  Data\n")
-                tempLogWriter?.flush()
+                logFileManager = LogFileManager(dirProvider()).also { it.open() }
             }
 
             repository.startCanLogging()
@@ -75,7 +67,7 @@ class DebugViewModel(
                 }
                 .onFailure { error ->
                     _uiState.update { it.copy(error = error.message) }
-                    withContext(Dispatchers.IO) { closeTempWriter() }
+                    withContext(Dispatchers.IO) { logFileManager?.close() }
                 }
         }
     }
@@ -84,7 +76,7 @@ class DebugViewModel(
         viewModelScope.launch {
             frameCollectionJob?.cancel()
             repository.stopCanLogging()
-            withContext(Dispatchers.IO) { closeTempWriter() }
+            withContext(Dispatchers.IO) { logFileManager?.close() }
             _uiState.update { it.copy(isLogging = false) }
         }
     }
@@ -108,15 +100,7 @@ class DebugViewModel(
     private fun collectFrames() {
         frameCollectionJob = viewModelScope.launch {
             repository.canFrames.collect { frame ->
-                withContext(Dispatchers.IO) {
-                    tempLogWriter?.let { writer ->
-                        val time = timeFormat.format(Date(frame.timestamp))
-                        val id = "0x%03X".format(frame.canId)
-                        val data = frame.data.joinToString(" ") { "%02X".format(it) }
-                        writer.write("$time  $id  [${frame.dlc}]  $data\n")
-                        if (_uiState.value.totalFrames % 100 == 0L) writer.flush()
-                    }
-                }
+                withContext(Dispatchers.IO) { logFileManager?.writeFrame(frame) }
 
                 _uiState.update { state ->
                     val newFrames = if (!state.isPaused) {
@@ -134,15 +118,7 @@ class DebugViewModel(
         viewModelScope.launch {
             try {
                 val file = withContext(Dispatchers.IO) {
-                    tempLogWriter?.flush()
-                    val tempFile = tempLogFile
-                        ?: throw Exception("No log — start logging first")
-                    if (!tempFile.exists() || tempFile.length() == 0L) {
-                        throw Exception("No frames to save")
-                    }
-                    val finalFile = File(getSaveDirectory(), "canlog_${dateFormat.format(Date())}.txt")
-                    tempFile.copyTo(finalFile, overwrite = true)
-                    finalFile
+                    logFileManager?.save() ?: throw IllegalStateException("No log — start logging first")
                 }
                 _uiState.update { it.copy(savedPath = file.absolutePath) }
             } catch (e: Exception) {
@@ -151,24 +127,11 @@ class DebugViewModel(
         }
     }
 
-    private fun getSaveDirectory(): File {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            File(appContext.getExternalFilesDir(null), LOG_DIR)
-        } else {
-            File(Environment.getExternalStorageDirectory(), LOG_DIR)
-        }
-    }
-
-    private fun closeTempWriter() {
-        try { tempLogWriter?.close() } catch (_: Exception) {}
-        tempLogWriter = null
-    }
-
     override fun onCleared() {
         super.onCleared()
         viewModelScope.launch {
             repository.stopCanLogging()
-            withContext(Dispatchers.IO) { closeTempWriter() }
+            withContext(Dispatchers.IO) { logFileManager?.close() }
         }
     }
 }
