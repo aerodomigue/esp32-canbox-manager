@@ -204,7 +204,7 @@ object CommandParser {
      * === Current Configuration ===
      * steerOffset  = 100    (center offset)
      * steerInvert  = 1    (invert direction)
-     * steerScale   = 4    (scale x0.01)
+     * steerScale   = 300    (scale x0.0001)
      * indTimeout   = 500    (indicator ms)
      * rpmDiv       = 7    (RPM divisor)
      * tankCap      = 45    (tank liters)
@@ -214,7 +214,7 @@ object CommandParser {
     fun parseCfgList(response: String): CalibrationConfig {
         val lines = response.lines()
         var steeringOffset = 0
-        var steeringScale = 100
+        var steeringScale = 300
         var steeringInvert = false
         var indicatorTimeout = 500
         var rpmDivisor = 7
@@ -233,7 +233,7 @@ object CommandParser {
 
             when (paramName) {
                 "steerOffset" -> steeringOffset = valueStr.toIntOrNull() ?: 0
-                "steerScale" -> steeringScale = valueStr.toIntOrNull() ?: 100
+                "steerScale" -> steeringScale = valueStr.toIntOrNull() ?: 300
                 "steerInvert" -> steeringInvert = valueStr == "1"
                 "indTimeout" -> indicatorTimeout = valueStr.toIntOrNull() ?: 500
                 "rpmDiv" -> rpmDivisor = valueStr.toIntOrNull() ?: 7
