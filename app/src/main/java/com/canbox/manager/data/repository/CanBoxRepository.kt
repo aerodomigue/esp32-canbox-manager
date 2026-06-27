@@ -174,10 +174,11 @@ class CanBoxRepository(
     }
 
     suspend fun uploadCanConfig(filename: String, content: ByteArray): Result<Unit> {
-        // Start upload
+        // Start upload — response is "OK READY" (not plain "OK"), check with startsWith
         val startResult = usbManager.sendCommand("CAN UPLOAD START $filename ${content.size}")
-        if (startResult.isFailure || !CommandParser.isSuccess(startResult.getOrDefault(""))) {
-            return Result.failure(Exception("Upload start failed"))
+        val startResponse = startResult.getOrDefault("")
+        if (startResult.isFailure || !startResponse.lines().any { it.trim().startsWith("OK") }) {
+            return Result.failure(Exception("Upload start failed: $startResponse"))
         }
 
         // Send data in chunks (150 bytes = 200 chars base64, conservative for reliability)
@@ -187,9 +188,10 @@ class CanBoxRepository(
             val chunk = content.sliceArray(i until minOf(i + chunkSize, content.size))
             val base64 = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP)
             val dataResult = usbManager.sendCommand("CAN UPLOAD DATA $base64", timeoutMs = 5000)
-            if (dataResult.isFailure) {
+            val dataResponse = dataResult.getOrDefault("")
+            if (dataResult.isFailure || !dataResponse.lines().any { it.trim().startsWith("OK") }) {
                 usbManager.sendCommand("CAN UPLOAD ABORT")
-                return Result.failure(Exception("Upload data failed at offset $i"))
+                return Result.failure(Exception("Upload data failed at offset $i: $dataResponse"))
             }
             totalSent += chunk.size
             // Small delay to let ESP32 process
