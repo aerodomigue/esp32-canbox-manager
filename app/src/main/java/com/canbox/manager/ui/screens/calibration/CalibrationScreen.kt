@@ -111,11 +111,10 @@ fun CalibrationScreen(
             )
 
             CalibrationItem(
-                label = "Steering Scale",
+                label = "Steering Scale (×0.0001)",
                 value = uiState.config.steeringScale,
                 range = CalibrationConfig.STEERING_SCALE_RANGE,
-                onValueChange = { viewModel.updateSteeringScale(it) },
-                displayDivisor = 100
+                onValueChange = { viewModel.updateSteeringScale(it) }
             )
 
             Row(

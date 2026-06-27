@@ -1,8 +1,11 @@
 package com.canbox.manager.data.repository
 
 import com.canbox.manager.data.usb.CommandParser
+import com.canbox.manager.data.usb.OtaCrcMismatchException
+import com.canbox.manager.data.usb.OtaProtocol
 import com.canbox.manager.data.usb.UsbConnectionState
 import com.canbox.manager.data.usb.UsbSerialManager
+import com.canbox.manager.data.usb.crc32Hex
 import com.canbox.manager.domain.model.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -171,10 +174,11 @@ class CanBoxRepository(
     }
 
     suspend fun uploadCanConfig(filename: String, content: ByteArray): Result<Unit> {
-        // Start upload
+        // Start upload — response is "OK READY" (not plain "OK"), check with startsWith
         val startResult = usbManager.sendCommand("CAN UPLOAD START $filename ${content.size}")
-        if (startResult.isFailure || !CommandParser.isSuccess(startResult.getOrDefault(""))) {
-            return Result.failure(Exception("Upload start failed"))
+        val startResponse = startResult.getOrDefault("")
+        if (startResult.isFailure || !startResponse.lines().any { it.trim().startsWith("OK") }) {
+            return Result.failure(Exception("Upload start failed: $startResponse"))
         }
 
         // Send data in chunks (150 bytes = 200 chars base64, conservative for reliability)
@@ -184,9 +188,10 @@ class CanBoxRepository(
             val chunk = content.sliceArray(i until minOf(i + chunkSize, content.size))
             val base64 = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP)
             val dataResult = usbManager.sendCommand("CAN UPLOAD DATA $base64", timeoutMs = 5000)
-            if (dataResult.isFailure) {
+            val dataResponse = dataResult.getOrDefault("")
+            if (dataResult.isFailure || !dataResponse.lines().any { it.trim().startsWith("OK") }) {
                 usbManager.sendCommand("CAN UPLOAD ABORT")
-                return Result.failure(Exception("Upload data failed at offset $i"))
+                return Result.failure(Exception("Upload data failed at offset $i: $dataResponse"))
             }
             totalSent += chunk.size
             // Small delay to let ESP32 process
@@ -253,10 +258,10 @@ class CanBoxRepository(
     suspend fun otaStart(size: Int, md5: String): Result<String> {
         val cmd = "OTA START $size $md5"
         android.util.Log.d(TAG, "OTA START - sending: $cmd")
-        return usbManager.sendCommand(cmd, timeoutMs = 10000).fold(
+        return usbManager.sendCommand(cmd, timeoutMs = OtaProtocol.START_TIMEOUT_MS).fold(
             onSuccess = { response ->
                 android.util.Log.d(TAG, "OTA START - response: $response")
-                if (response.contains("OK") || response.contains("READY")) {
+                if (response.contains("OK READY")) {
                     Result.success(response)
                 } else {
                     Result.failure(Exception(parseError(response)))
@@ -270,18 +275,20 @@ class CanBoxRepository(
     }
 
     /**
-     * Send firmware data chunk (base64 encoded)
+     * Send firmware data chunk (base64 encoded + CRC32)
      * Chunk size: 180 bytes binary = 240 chars base64
-     * Response: "OK <received>/<total> (<percent>%)" or "ERROR: <message>"
+     * Response: "OK <received>/<total> (<percent>%)" or "ERROR: CRC mismatch chunk …" (retry safe)
      */
     suspend fun otaSendData(data: ByteArray): Result<String> {
         val base64 = android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP)
-        return usbManager.sendCommand("OTA DATA $base64", timeoutMs = 10000).fold(
+        val crc = data.crc32Hex()
+        return usbManager.sendCommand("OTA DATA $base64 $crc", timeoutMs = OtaProtocol.CHUNK_TIMEOUT_MS).fold(
             onSuccess = { response ->
-                if (response.contains("OK")) {
-                    Result.success(response)
-                } else {
-                    Result.failure(Exception(parseError(response)))
+                when {
+                    response.contains("OK") -> Result.success(response)
+                    response.contains("CRC mismatch", ignoreCase = true) ->
+                        Result.failure(OtaCrcMismatchException(response))
+                    else -> Result.failure(Exception(parseError(response)))
                 }
             },
             onFailure = { error ->
@@ -298,10 +305,11 @@ class CanBoxRepository(
      */
     suspend fun otaEnd(): Result<String> {
         android.util.Log.d(TAG, "OTA END - sending")
-        return usbManager.sendCommand("OTA END", timeoutMs = 30000).fold(
+        return usbManager.sendCommand("OTA END", timeoutMs = OtaProtocol.END_TIMEOUT_MS).fold(
             onSuccess = { response ->
                 android.util.Log.d(TAG, "OTA END - response: $response")
-                if (response.contains("OK")) {
+                // Terminal line is exactly "OK" on its own line (not "MD5 verified OK")
+                if (response.lines().any { it.trim() == "OK" }) {
                     Result.success(response)
                 } else {
                     Result.failure(Exception(parseError(response)))
@@ -315,13 +323,14 @@ class CanBoxRepository(
     }
 
     /**
-     * Abort OTA in progress
-     * Response: "OTA aborted"
+     * Abort OTA in progress (pre-flight or cancel).
+     * Response "OTA aborted" has no OK/ERROR prefix — sendCommand will timeout after 1s.
+     * This 1s timeout acts as the required RX drain before the next OTA START.
      */
     suspend fun otaAbort(): Result<Unit> {
-        return usbManager.sendCommand("OTA ABORT", timeoutMs = 2000).fold(
+        return usbManager.sendCommand("OTA ABORT", timeoutMs = 1000).fold(
             onSuccess = { Result.success(Unit) },
-            onFailure = { Result.success(Unit) }  // Ignore errors
+            onFailure = { Result.success(Unit) }  // Ignore timeout / errors
         )
     }
 

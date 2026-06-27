@@ -188,7 +188,7 @@ fun UpdateScreen(
 
         // Install from file button
         OutlinedButton(
-            onClick = { filePickerLauncher.launch("application/octet-stream") },
+            onClick = { filePickerLauncher.launch("*/*") },
             modifier = Modifier.fillMaxWidth(),
             enabled = uiState.updateProgress.state == UpdateState.IDLE
         ) {

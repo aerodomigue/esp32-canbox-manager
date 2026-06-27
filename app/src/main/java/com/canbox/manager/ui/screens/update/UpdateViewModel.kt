@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.canbox.manager.data.github.GitHubRepository
 import com.canbox.manager.data.repository.CanBoxRepository
+import com.canbox.manager.data.usb.OtaCrcMismatchException
+import com.canbox.manager.data.usb.OtaProtocol
 import com.canbox.manager.data.usb.UsbConnectionState
 import com.canbox.manager.domain.model.FirmwareInfo
 import com.canbox.manager.domain.model.GitHubRelease
@@ -144,17 +146,14 @@ class UpdateViewModel(
     }
 
     /**
-     * Flash firmware using OTA protocol with base64 encoding
+     * Flash firmware using OTA protocol v2 (base64 + CRC32 per chunk)
      *
-     * Protocol flow:
-     * 1. Send "OTA START <size> <md5>\n" → "OK READY"
-     * 2. Send "OTA DATA <base64>\n" → "OK <received>/<total> (<percent>%)"
-     * 3. Repeat step 2 for all chunks
-     * 4. Send "OTA END\n" → "MD5 verified OK\nOK"
-     * 5. ESP32 reboots automatically after 2 seconds
-     *
-     * Chunk size: 180 bytes binary = 240 chars base64 (fits in 256 byte buffer)
-     * Retry: up to 3 attempts if flash fails
+     * Pre-flight : OTA ABORT → 1s drain (built into otaAbort timeout)
+     * Start      : OTA START <size> <md5>  →  info lines … OK READY
+     * Data       : OTA DATA <base64> <crc32>  →  OK <recv>/<total> (<pct>%)
+     *              CRC mismatch → retry same chunk (OtaProtocol.MAX_CRC_RETRIES times)
+     * End        : OTA END  →  MD5 verified OK … OK
+     * Retry full : up to MAX_FLASH_RETRIES on non-CRC errors
      */
     private suspend fun flashFirmware(firmwareFile: File) {
         val firmwareData = firmwareFile.readBytes()
@@ -177,9 +176,8 @@ class UpdateViewModel(
                     )
                 }
 
-                // Abort any previous OTA
+                // Pre-flight: clear any in-progress OTA; 1s drain baked into otaAbort timeout
                 repository.otaAbort()
-                kotlinx.coroutines.delay(500)
 
                 _uiState.update {
                     it.copy(
@@ -199,26 +197,41 @@ class UpdateViewModel(
                     }
                 android.util.Log.d(TAG, "OTA: Started - $startResponse")
 
-                // Step 2: Send data chunks (180 bytes binary = 240 chars base64)
-                val chunkSize = 180
+                // Step 2: Send data chunks with CRC32, chunk-level retry on CRC mismatch
                 var sent = 0
                 var lastLogPercent = -10
 
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     while (sent < firmwareSize) {
-                        val end = minOf(sent + chunkSize, firmwareSize)
+                        val end = minOf(sent + OtaProtocol.CHUNK_SIZE, firmwareSize)
                         val chunk = firmwareData.sliceArray(sent until end)
 
-                        val dataResponse = repository.otaSendData(chunk)
-                            .getOrElse { error ->
-                                android.util.Log.e(TAG, "OTA: Data failed at $sent: ${error.message}")
-                                throw error
+                        for (crcAttempt in 1..OtaProtocol.MAX_CRC_RETRIES) {
+                            val dataResult = repository.otaSendData(chunk)
+                            when {
+                                dataResult.isSuccess -> {
+                                    val percent = (end * 100) / firmwareSize
+                                    if (percent >= lastLogPercent + 10) {
+                                        lastLogPercent = percent
+                                        android.util.Log.d(TAG, "OTA: $percent% ($end/$firmwareSize) - ${dataResult.getOrNull()}")
+                                    }
+                                    break  // chunk accepted — exit retry loop
+                                }
+                                dataResult.exceptionOrNull() is OtaCrcMismatchException -> {
+                                    android.util.Log.w(TAG, "OTA: CRC mismatch at $sent, retry $crcAttempt/${OtaProtocol.MAX_CRC_RETRIES}")
+                                    if (crcAttempt == OtaProtocol.MAX_CRC_RETRIES) throw dataResult.exceptionOrNull()!!
+                                    kotlinx.coroutines.delay(OtaProtocol.CRC_RETRY_PAUSE_MS)
+                                }
+                                else -> {
+                                    android.util.Log.e(TAG, "OTA: Data failed at $sent: ${dataResult.exceptionOrNull()?.message}")
+                                    throw dataResult.exceptionOrNull()!!
+                                }
                             }
+                        }
 
+                        // Reached only on successful chunk (loop threw on all errors)
                         sent = end
                         val percent = (sent * 100) / firmwareSize
-
-                        // Update UI
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                             _uiState.update {
                                 it.copy(
@@ -231,12 +244,6 @@ class UpdateViewModel(
                                     )
                                 )
                             }
-                        }
-
-                        // Log progress every 10%
-                        if (percent >= lastLogPercent + 10) {
-                            lastLogPercent = percent
-                            android.util.Log.d(TAG, "OTA: $percent% ($sent/$firmwareSize) - $dataResponse")
                         }
                     }
                 }
@@ -313,6 +320,24 @@ class UpdateViewModel(
     fun installFromFile(uri: android.net.Uri, context: android.content.Context) {
         viewModelScope.launch {
             try {
+                val displayName = context.contentResolver.query(
+                    uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                } ?: uri.lastPathSegment
+
+                if (displayName?.endsWith(".ota", ignoreCase = true) != true) {
+                    _uiState.update {
+                        it.copy(
+                            updateProgress = UpdateProgress(
+                                state = UpdateState.ERROR,
+                                message = "Invalid file: only .ota firmware files are supported"
+                            )
+                        )
+                    }
+                    return@launch
+                }
+
                 _uiState.update {
                     it.copy(
                         updateProgress = UpdateProgress(
