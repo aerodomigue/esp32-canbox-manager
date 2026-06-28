@@ -135,7 +135,9 @@ fun DebugScreen(
             Spacer(Modifier.height(8.dp))
         }
 
-        uiState.savedPath?.let { path ->
+        val saveNotifPath = uiState.usbSavedPath ?: uiState.savedPath
+        val saveNotifLabel = if (uiState.usbSavedPath != null) "Saved to USB: " else "Saved: "
+        saveNotifPath?.let { path ->
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                 modifier = Modifier.fillMaxWidth()
@@ -144,7 +146,7 @@ fun DebugScreen(
                     Icon(Icons.Filled.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "Saved: $path",
+                        "$saveNotifLabel$path",
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace
