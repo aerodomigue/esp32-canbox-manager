@@ -10,6 +10,10 @@
     <!-- Internet for GitHub API -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Foreground service to keep process alive during USB session -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
     <!-- Storage for log files export (API <= 28 needs runtime grant) -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
@@ -43,10 +47,11 @@
 
         </activity>
 
-        <!-- USB Serial Service -->
+        <!-- USB Serial Service — foreground service to prevent process kill in background -->
         <service
             android:name=".data.usb.UsbSerialService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- FileProvider for sharing exported logs -->
         <provider

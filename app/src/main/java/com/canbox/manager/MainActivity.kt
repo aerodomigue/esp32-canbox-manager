@@ -1,12 +1,16 @@
 package com.canbox.manager
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
+import com.canbox.manager.data.usb.UsbSerialService
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
@@ -46,6 +50,10 @@ class MainActivity : ComponentActivity() {
 
     private val repository: CanBoxRepository by inject()
 
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { /* result handled per-screen where needed */ }
+
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -58,6 +66,29 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Start foreground service so Android won't kill the process in background
+        startUsbService(connected = false)
+
+        // Request storage permission upfront (API <= 29 only — Android 10 and below)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            val perm = Manifest.permission.WRITE_EXTERNAL_STORAGE
+            if (checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED) {
+                permissionLauncher.launch(arrayOf(perm))
+            }
+        }
+
+        // Update service notification when USB connection state changes
+        lifecycleScope.launch {
+            repository.connectionState.collect { state ->
+                when (state) {
+                    is UsbConnectionState.Connected ->
+                        startUsbService(connected = true, deviceName = state.deviceName)
+                    else ->
+                        startUsbService(connected = false)
+                }
+            }
+        }
+
         // Enable full screen immersive mode
         hideSystemBars()
 
@@ -65,6 +96,18 @@ class MainActivity : ComponentActivity() {
             CANBoxManagerTheme {
                 MainScreen(repository)
             }
+        }
+    }
+
+    private fun startUsbService(connected: Boolean, deviceName: String? = null) {
+        val intent = Intent(this, UsbSerialService::class.java).apply {
+            putExtra(UsbSerialService.EXTRA_CONNECTED, connected)
+            putExtra(UsbSerialService.EXTRA_DEVICE_NAME, deviceName)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
     }
 
@@ -112,6 +155,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         repository.release()
+        stopService(Intent(this, UsbSerialService::class.java))
     }
 }
 
