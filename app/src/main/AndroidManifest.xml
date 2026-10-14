@@ -10,11 +10,12 @@
     <!-- Internet for GitHub API -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Storage for log files export (API <= 28 needs runtime grant) -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32"
+    <!-- Foreground service keeps USB capture alive while the activity is backgrounded. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Direct, picker-free exports to mounted USB/SD storage on the sideloaded head unit. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
     <application
@@ -25,7 +26,6 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.CANBoxManager"
-        android:requestLegacyExternalStorage="true"
         tools:targetApi="35">
 
         <activity
@@ -46,7 +46,8 @@
         <!-- USB Serial Service -->
         <service
             android:name=".data.usb.UsbSerialService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- FileProvider for sharing exported logs -->
         <provider

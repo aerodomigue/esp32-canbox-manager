@@ -1,6 +1,10 @@
 package com.canbox.manager.data.repository
 
+import android.content.Context
+import com.canbox.manager.data.log.CanLogEntry
+import com.canbox.manager.data.log.CanLogStorage
 import com.canbox.manager.data.usb.CommandParser
+import com.canbox.manager.data.usb.SerialLineBuffer
 import com.canbox.manager.data.usb.OtaCrcMismatchException
 import com.canbox.manager.data.usb.OtaProtocol
 import com.canbox.manager.data.usb.UsbConnectionState
@@ -9,15 +13,30 @@ import com.canbox.manager.data.usb.crc32Hex
 import com.canbox.manager.domain.model.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.io.File
 
 class CanBoxRepository(
-    private val usbManager: UsbSerialManager
+    private val usbManager: UsbSerialManager,
+    appContext: Context
 ) {
     companion object {
         private const val TAG = "CanBoxRepository"
+        private const val LOGGING_REQUESTED_KEY = "logging_requested"
     }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val logStorage = CanLogStorage.fromDirectory(
+        appContext.getExternalFilesDir(null)?.let {
+            CanLogStorage.externalDirectory(it)
+        } ?: File(appContext.filesDir, "canbox")
+    )
+    private val loggingMutex = Mutex()
+    private val loggingPreferences = appContext.getSharedPreferences(
+        "canbox_logging",
+        Context.MODE_PRIVATE
+    )
 
     // Connection state
     val connectionState: StateFlow<UsbConnectionState> = usbManager.connectionState
@@ -29,11 +48,41 @@ class CanBoxRepository(
     private var pollingJob: Job? = null
     private var logStreamJob: Job? = null
 
-    // CAN frame streaming for debug
-    private val _canFrames = MutableSharedFlow<CanFrame>(replay = 0, extraBufferCapacity = 1000)
-    val canFrames: SharedFlow<CanFrame> = _canFrames.asSharedFlow()
+    private val _logEntries = MutableSharedFlow<CanLogEntry>(replay = 0, extraBufferCapacity = 1000)
+    val logEntries: SharedFlow<CanLogEntry> = _logEntries.asSharedFlow()
 
+    @Volatile
     private var isLogging = false
+    private var loggingSessionId: Long? = null
+    private val logLineBuffer = SerialLineBuffer()
+
+    private val _canLoggingState = MutableStateFlow(
+        CanLoggingState(recoverableFiles = logStorage.recoveredFiles())
+    )
+    val canLoggingState: StateFlow<CanLoggingState> = _canLoggingState.asStateFlow()
+
+    init {
+        // Keep the parser and durable writer owned by the application-scoped
+        // repository, not by a screen ViewModel. This allows logging to
+        // continue while the activity is backgrounded or recreated.
+        startLogStream()
+        scope.launch {
+            connectionState
+                .collect {
+                    // A unique session ID also catches rapid reconnects when StateFlow
+                    // conflates the intermediate disconnected/connecting states.
+                    loggingMutex.withLock {
+                        val session = (connectionState.value as? UsbConnectionState.Connected)?.sessionId
+                        if (isLogging && (session == null || session != loggingSessionId)) {
+                            stopCanLoggingSync()
+                        }
+                    }
+                    if (connectionState.value.isConnected && isCanLoggingRequested() && !isLogging) {
+                        resumeCanLoggingIfRequested()
+                    }
+                }
+        }
+    }
 
     fun connect(): Boolean {
         return usbManager.connect()
@@ -43,6 +92,17 @@ class CanBoxRepository(
         stopPolling()
         stopCanLoggingSync()
         usbManager.disconnect()
+    }
+
+    /** Resume a session requested before a process/activity restart. */
+    fun isCanLoggingRequested(): Boolean =
+        loggingPreferences.getBoolean(LOGGING_REQUESTED_KEY, false)
+
+    suspend fun resumeCanLoggingIfRequested(): Result<Unit> {
+        if (!isCanLoggingRequested()) {
+            return Result.success(Unit)
+        }
+        return startCanLogging()
     }
 
     // System commands
@@ -207,39 +267,107 @@ class CanBoxRepository(
     }
 
     // Debug logging commands
-    suspend fun startCanLogging(): Result<Unit> {
+    suspend fun startCanLogging(): Result<Unit> = loggingMutex.withLock {
+        if (isLogging) return@withLock Result.success(Unit)
+
+        try {
+            logStorage.open()
+        } catch (error: Exception) {
+            return@withLock Result.failure(error)
+        }
+
+        // Enable capture before sending LOG ON so frames received in the same
+        // USB chunk as the command response are not silently discarded.
+        loggingSessionId = (connectionState.value as? UsbConnectionState.Connected)?.sessionId
+        isLogging = true
+        _canLoggingState.value = CanLoggingState(
+            isLogging = true,
+            recoverableFiles = logStorage.recoveredFiles()
+        )
+
         val result = usbManager.sendCommand("LOG ON")
         if (result.isSuccess) {
-            isLogging = true
-            startLogStream()
+            withContext(Dispatchers.IO) {
+                loggingPreferences.edit().putBoolean(LOGGING_REQUESTED_KEY, true).commit()
+            }
+        } else {
+            stopCanLoggingSync()
         }
-        return result.map { }
+        result.map { }
     }
 
-    suspend fun stopCanLogging(): Result<Unit> {
-        stopCanLoggingSync()
-        return usbManager.sendCommand("LOG OFF").map { }
+    suspend fun stopCanLogging(): Result<Unit> = loggingMutex.withLock {
+        val result = if (isLogging) {
+            usbManager.sendCommand("LOG OFF")
+        } else {
+            Result.success("")
+        }
+        withContext(Dispatchers.IO) {
+            loggingPreferences.edit().putBoolean(LOGGING_REQUESTED_KEY, false).commit()
+        }
+        stopCanLoggingSync(clean = true)
+        result.map { }
     }
 
-    private fun stopCanLoggingSync() {
+    private fun stopCanLoggingSync(clean: Boolean = false) {
         isLogging = false
-        logStreamJob?.cancel()
-        logStreamJob = null
+        loggingSessionId = null
+        logLineBuffer.clear()
+        logStorage.close(clean = clean)
+        _canLoggingState.update {
+            it.copy(
+                isLogging = false,
+                recoverableFiles = logStorage.recoveredFiles()
+            )
+        }
     }
 
     private fun startLogStream() {
+        if (logStreamJob?.isActive == true) return
         logStreamJob = scope.launch {
             usbManager.receivedData.collect { data ->
-                if (isLogging) {
-                    // Parse each line as a potential CAN frame
-                    data.lines().forEach { line ->
-                        CommandParser.parseCanFrame(line)?.let { frame ->
-                            _canFrames.emit(frame)
+                // USB reads are arbitrary chunks. Keep incomplete lines until
+                // the next read so a frame split across reads is not lost.
+                val completeLines = logLineBuffer.append(data)
+
+                if (!isLogging) return@collect
+                completeLines.forEach { rawLine ->
+                    val entry = CanLogEntry.fromRawLine(rawLine) ?: return@forEach
+
+                    try {
+                        // RX and ODB lines are exported byte-for-byte as received.
+                        // Display and export both use the original line.
+                        logStorage.writeRawFrame(rawLine)
+                        _canLoggingState.update {
+                            it.copy(totalFrames = it.totalFrames + 1)
+                        }
+                        _logEntries.tryEmit(entry)
+                    } catch (error: Exception) {
+                        android.util.Log.e(TAG, "CAN log write failed", error)
+                        isLogging = false
+                        logStorage.close(clean = false)
+                        _canLoggingState.update {
+                            it.copy(
+                                isLogging = false,
+                                error = "Log storage failed: ${error.message}"
+                            )
                         }
                     }
                 }
             }
         }
+    }
+
+    suspend fun saveCanLog(): Result<File> = withContext(Dispatchers.IO) {
+        runCatching { logStorage.save() }
+            .onSuccess { file ->
+                _canLoggingState.update {
+                    it.copy(
+                        lastSavedFile = file,
+                        recoverableFiles = logStorage.recoveredFiles()
+                    )
+                }
+            }
     }
 
     // Firmware update commands
@@ -354,7 +482,16 @@ class CanBoxRepository(
 
     fun release() {
         scope.cancel()
+        logStorage.close()
         usbManager.release()
     }
 
 }
+
+data class CanLoggingState(
+    val isLogging: Boolean = false,
+    val totalFrames: Long = 0,
+    val lastSavedFile: File? = null,
+    val recoverableFiles: List<File> = emptyList(),
+    val error: String? = null
+)

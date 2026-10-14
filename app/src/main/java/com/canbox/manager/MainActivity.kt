@@ -16,6 +16,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -34,6 +35,7 @@ import com.canbox.manager.data.github.GitHubRepository
 import com.canbox.manager.data.repository.CanBoxRepository
 import com.canbox.manager.util.isNewerVersion
 import com.canbox.manager.data.usb.UsbConnectionState
+import com.canbox.manager.data.usb.UsbSerialService
 import com.canbox.manager.ui.navigation.AppNavHost
 import com.canbox.manager.ui.navigation.TopNavigationBar
 import com.canbox.manager.ui.theme.CANBoxManagerTheme
@@ -50,7 +52,6 @@ class MainActivity : ComponentActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> connectAsync()
-                UsbManager.ACTION_USB_DEVICE_DETACHED -> repository.disconnect()
             }
         }
     }
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
 
         // Enable full screen immersive mode
         hideSystemBars()
+        startUsbService()
 
         setContent {
             CANBoxManagerTheme {
@@ -84,10 +86,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Register USB receiver for attach/detach while app is open
+        // The application-scoped serial manager handles detach even in background.
         val filter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
-            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -109,9 +110,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        repository.release()
+    private fun startUsbService() {
+        val serviceIntent = Intent(this, UsbSerialService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
     }
 }
 
