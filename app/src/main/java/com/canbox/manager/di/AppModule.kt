@@ -3,6 +3,7 @@ package com.canbox.manager.di
 import com.canbox.manager.data.github.GitHubApi
 import com.canbox.manager.data.github.GitHubRepository
 import com.canbox.manager.data.repository.CanBoxRepository
+import com.canbox.manager.data.log.ExternalLogExporter
 import com.canbox.manager.data.usb.UsbSerialManager
 import com.canbox.manager.ui.screens.calibration.CalibrationViewModel
 import com.canbox.manager.ui.screens.canconfig.CanConfigViewModel
@@ -44,7 +45,8 @@ val appModule = module {
     single { get<Retrofit>().create(GitHubApi::class.java) }
 
     // Repositories
-    single { CanBoxRepository(get()) }
+    single { CanBoxRepository(get(), androidContext()) }
+    single { ExternalLogExporter(androidContext()) }
     single { GitHubRepository(get()) }
 
     // ViewModels
@@ -52,5 +54,5 @@ val appModule = module {
     viewModel { CanConfigViewModel(get(), get()) }
     viewModel { CalibrationViewModel(get()) }
     viewModel { UpdateViewModel(get(), get()) }
-    viewModel { DebugViewModel(get(), androidContext()) }
+    viewModel { DebugViewModel(get(), get(), get()) }
 }

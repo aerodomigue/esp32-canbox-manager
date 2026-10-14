@@ -9,6 +9,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
@@ -16,6 +17,8 @@ import com.hoho.android.usbserial.util.SerialInputOutputManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 import java.util.concurrent.Executors
 
@@ -33,6 +36,9 @@ class UsbSerialManager(
 
     private val usbManager: UsbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private var serialPort: UsbSerialPort? = null
+    // A flash drive on the same hub must not be mistaken for the serial device.
+    @Volatile private var selectedDeviceId: Int? = null
+    private var connectionSequence = 0L
     private var ioManager: SerialInputOutputManager? = null
     private val executor = Executors.newSingleThreadExecutor()
 
@@ -42,10 +48,18 @@ class UsbSerialManager(
     private val _connectionState = MutableStateFlow<UsbConnectionState>(UsbConnectionState.Disconnected)
     val connectionState: StateFlow<UsbConnectionState> = _connectionState.asStateFlow()
 
-    private val _receivedData = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 100)
-    val receivedData: SharedFlow<String> = _receivedData.asSharedFlow()
+    // The logger must not lose USB chunks because a UI collector is slow.
+    // Command responses are parsed synchronously below; this channel is the
+    // independent stream consumed by the long-lived repository logger.
+    private val receivedDataChannel = Channel<String>(Channel.UNLIMITED)
+    val receivedData: Flow<String> = receivedDataChannel.receiveAsFlow()
 
-    private val responseBuffer = StringBuilder()
+    // The serial protocol has one response buffer, so only one command may be
+    // in flight at a time.
+    private val commandMutex = Mutex()
+
+    private val responseBuffer = CommandResponseBuffer()
+    private val textDecoder = Utf8StreamDecoder()
     private var pendingResponseChannel: Channel<String>? = null
 
     private val usbReceiver = object : BroadcastReceiver() {
@@ -68,8 +82,20 @@ class UsbSerialManager(
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    Log.d(TAG, "USB device detached")
-                    disconnect()
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                    }
+                    if (isSelectedDevice(device?.deviceId)) {
+                        Log.d(TAG, "Serial USB device detached")
+                        disconnect()
+                    }
+                }
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                    Log.d(TAG, "USB device attached")
+                    connect()
                 }
             }
         }
@@ -79,17 +105,22 @@ class UsbSerialManager(
         val filter = IntentFilter().apply {
             addAction(ACTION_USB_PERMISSION)
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            context.registerReceiver(usbReceiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            context,
+            usbReceiver,
+            filter,
+            ContextCompat.RECEIVER_EXPORTED
+        )
     }
 
     fun findDevices(): List<UsbSerialDriver> {
         return UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
     }
+
+    private fun isSelectedDevice(deviceId: Int?): Boolean =
+        deviceId != null && deviceId == selectedDeviceId
 
     @Synchronized
     fun connect(): Boolean {
@@ -108,6 +139,7 @@ class UsbSerialManager(
 
         val driver = drivers[0]
         val device = driver.device
+        selectedDeviceId = device.deviceId
 
         if (!usbManager.hasPermission(device)) {
             Log.d(TAG, "Requesting USB permission")
@@ -141,6 +173,7 @@ class UsbSerialManager(
         }
 
         isConnecting = true
+        selectedDeviceId = device.deviceId
         _connectionState.value = UsbConnectionState.Connecting
 
         try {
@@ -184,7 +217,8 @@ class UsbSerialManager(
             _connectionState.value = UsbConnectionState.Connected(
                 deviceName = device.productName ?: "USB Device",
                 vendorId = device.vendorId,
-                productId = device.productId
+                productId = device.productId,
+                sessionId = ++connectionSequence
             )
 
             Log.d(TAG, "Connected to ${device.productName}")
@@ -203,6 +237,7 @@ class UsbSerialManager(
     @Synchronized
     fun disconnect() {
         isConnecting = false
+        selectedDeviceId = null
         ioManager?.listener = null
         ioManager?.stop()
         ioManager = null
@@ -214,75 +249,71 @@ class UsbSerialManager(
         }
         serialPort = null
 
+        textDecoder.reset()
+        responseBuffer.reset()
         _connectionState.value = UsbConnectionState.Disconnected
         Log.d(TAG, "Disconnected")
     }
 
-    suspend fun sendCommand(command: String, timeoutMs: Long = 2000L): Result<String> {
-        val port = serialPort ?: return Result.failure(IOException("Not connected"))
+    suspend fun sendCommand(command: String, timeoutMs: Long = 2000L): Result<String> =
+        commandMutex.withLock {
+            val port = serialPort ?: return@withLock Result.failure(IOException("Not connected"))
 
-        return withContext(Dispatchers.IO) {
-            try {
-                // Clear any pending data
-                responseBuffer.clear()
-                pendingResponseChannel = Channel(1)
+            withContext(Dispatchers.IO) {
+                val responseChannel = Channel<String>(1)
+                var timedOut = false
+                try {
+                    synchronized(this@UsbSerialManager) {
+                        responseBuffer.begin(command)
+                        pendingResponseChannel = responseChannel
+                    }
 
-                val data = "$command\n".toByteArray()
-                port.write(data, WRITE_TIMEOUT_MS)
+                    port.write("$command\n".toByteArray(), WRITE_TIMEOUT_MS)
+                    val response = withTimeoutOrNull(timeoutMs) {
+                        responseChannel.receive()
+                    }
 
-                // Wait for response
-                val response = withTimeoutOrNull(timeoutMs) {
-                    pendingResponseChannel?.receive()
+                    if (response == null) {
+                        timedOut = true
+                        val bufferContent = synchronized(this@UsbSerialManager) {
+                            responseBuffer.partialResponse()
+                        }
+                        Log.e(TAG, "Command timeout: $command (buffer: $bufferContent)")
+                        Result.failure(IOException("Command timeout"))
+                    } else {
+                        Result.success(response)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Send command failed: $command", e)
+                    Result.failure(e)
+                } finally {
+                    synchronized(this@UsbSerialManager) {
+                        if (pendingResponseChannel === responseChannel) {
+                            pendingResponseChannel = null
+                            responseBuffer.end()
+                        }
+                    }
+                    responseChannel.close()
+                    if (timedOut) {
+                        // Drain late bytes before allowing the next command to
+                        // install a response channel; otherwise a delayed OK
+                        // can be attributed to the wrong command.
+                        delay(READ_TIMEOUT_MS.toLong())
+                    }
                 }
-
-                if (response == null) {
-                    val bufferContent = responseBuffer.toString()
-                    Log.e(TAG, "Command timeout: $command (buffer: $bufferContent)")
-                    pendingResponseChannel = null
-                    return@withContext Result.failure(IOException("Command timeout"))
-                }
-
-                pendingResponseChannel = null
-                Result.success(response)
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Send command failed: $command", e)
-                pendingResponseChannel = null
-                Result.failure(e)
             }
         }
-    }
 
     @Synchronized
     override fun onNewData(data: ByteArray) {
-        val text = String(data)
-        responseBuffer.append(text)
+        val text = textDecoder.decode(data)
 
         // Emit each incoming chunk immediately for streaming consumers (CAN log frames).
-        _receivedData.tryEmit(text)
+        receivedDataChannel.trySend(text)
 
-        val response = responseBuffer.toString()
-
-        // Only inspect complete lines (terminated by \n) to avoid false positives on partial data.
-        // split('\n').dropLast(1) gives all newline-terminated segments.
-        val completeLines = response.split('\n').dropLast(1).map { it.trimEnd('\r').trim() }
-
-        val hasOkResponse = completeLines.any { it.startsWith("OK") }
-        val hasErrorResponse = completeLines.any { it.startsWith("ERROR") }
-        // Prompt arrives without trailing \n — keep raw-string check
-        val hasPrompt = response.contains("\r\n> ") || response.contains("\n> ")
-        val isDelimiterLine = completeLines.lastOrNull { it.isNotBlank() }
-            ?.let { line -> line.length >= 10 && line.all { it == '=' } } == true
-
-        // "OTA aborted" has no OK/ERROR prefix: do NOT detect it here so that
-        // sendCommand("OTA ABORT", 1000) always times out after 1s — that IS the required drain.
-        val isComplete = hasOkResponse || hasErrorResponse || hasPrompt ||
-            (isDelimiterLine && completeLines.size >= 2)
-
-        if (isComplete) {
-            val completeResponse = responseBuffer.toString().trim()
-            responseBuffer.clear()
-
+        // Keep framing even between commands; an ODB line may cross that boundary.
+        val completeResponse = responseBuffer.append(text)
+        if (completeResponse != null) {
             Log.d(TAG, "Complete response: ${completeResponse.take(150)}")
 
             pendingResponseChannel?.trySend(completeResponse)
@@ -303,6 +334,7 @@ class UsbSerialManager(
             Log.e(TAG, "Error unregistering receiver", e)
         }
         executor.shutdown()
+        receivedDataChannel.close()
     }
 }
 
@@ -312,7 +344,8 @@ sealed class UsbConnectionState {
     data class Connected(
         val deviceName: String,
         val vendorId: Int,
-        val productId: Int
+        val productId: Int,
+        val sessionId: Long = 0
     ) : UsbConnectionState()
     data class Error(val message: String) : UsbConnectionState()
 

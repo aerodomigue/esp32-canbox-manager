@@ -1,8 +1,11 @@
 package com.canbox.manager.ui.screens.debug
 
-import android.Manifest
-import android.content.pm.PackageManager
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -19,11 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import com.canbox.manager.domain.model.CanFrame
 import org.koin.androidx.compose.koinViewModel
-import java.text.SimpleDateFormat
-import java.util.*
 
 @Composable
 fun DebugScreen(
@@ -32,26 +31,32 @@ fun DebugScreen(
     val context = LocalContext.current
     val connectionState by viewModel.connectionState.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
-
-    val writePermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            viewModel.saveToFile()
-        } else {
-            viewModel.setError("Storage permission denied — cannot save log file")
-        }
+    val storagePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        viewModel.onStoragePermissionResult(
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
+        )
     }
 
-    fun requestSave() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            viewModel.saveToFile()
-        } else {
-            val permission = Manifest.permission.WRITE_EXTERNAL_STORAGE
-            if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
-                viewModel.saveToFile()
-            } else {
-                writePermissionLauncher.launch(permission)
+    LaunchedEffect(uiState.storagePermissionRequired) {
+        if (uiState.storagePermissionRequired && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            viewModel.storagePermissionOpened()
+            try {
+                storagePermission.launch(Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:${context.packageName}")
+                ))
+            } catch (_: ActivityNotFoundException) {
+                try {
+                    storagePermission.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                } catch (_: ActivityNotFoundException) {
+                    viewModel.onStoragePermissionResult(false)
+                } catch (_: SecurityException) {
+                    viewModel.onStoragePermissionResult(false)
+                }
+            } catch (_: SecurityException) {
+                viewModel.onStoragePermissionResult(false)
             }
         }
     }
@@ -102,22 +107,39 @@ fun DebugScreen(
             }
 
             IconButton(
-                onClick = { requestSave() },
-                enabled = uiState.totalFrames > 0
+                onClick = { viewModel.saveToFile() },
+                enabled = !uiState.isExporting &&
+                    (uiState.totalFrames > 0 || uiState.recoverablePaths.isNotEmpty())
             ) {
-                Icon(Icons.Filled.Save, "Save to file")
+                Icon(Icons.Filled.Save, "Sauvegarder et copier sur USB / SD")
+            }
+
+            IconButton(
+                onClick = { viewModel.sendSavedLogByEmail(context) },
+                enabled = uiState.savedPath != null
+            ) {
+                Icon(Icons.Filled.Email, "Send by email")
             }
 
             Spacer(Modifier.weight(1f))
 
             Text(
-                "Total: ${uiState.totalFrames}",
+                "Lines: ${uiState.totalFrames}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
         Spacer(Modifier.height(8.dp))
+
+        if (uiState.isExporting) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            Text("Sauvegarde et export du log complet…", style = MaterialTheme.typography.bodySmall)
+        }
+        uiState.exportMessage?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(8.dp))
+        }
 
         // Messages
         uiState.error?.let { error ->
@@ -135,9 +157,7 @@ fun DebugScreen(
             Spacer(Modifier.height(8.dp))
         }
 
-        val saveNotifPath = uiState.usbSavedPath ?: uiState.savedPath
-        val saveNotifLabel = if (uiState.usbSavedPath != null) "Saved to USB: " else "Saved: "
-        saveNotifPath?.let { path ->
+        uiState.savedPath?.let { path ->
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                 modifier = Modifier.fillMaxWidth()
@@ -146,7 +166,11 @@ fun DebugScreen(
                     Icon(Icons.Filled.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "$saveNotifLabel$path",
+                        if (uiState.recoverablePaths.contains(path)) {
+                            "Recovered log: $path"
+                        } else {
+                            "Saved: $path"
+                        },
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace
@@ -172,20 +196,16 @@ fun DebugScreen(
                         .padding(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Time",  modifier = Modifier.width(100.dp), style = MaterialTheme.typography.labelMedium)
-                    Text("ID",   modifier = Modifier.width(64.dp),  style = MaterialTheme.typography.labelMedium)
-                    Text("DLC",  modifier = Modifier.width(32.dp),  style = MaterialTheme.typography.labelMedium)
-                    Text("Data", style = MaterialTheme.typography.labelMedium)
+                    Text("CAN / ODB", style = MaterialTheme.typography.labelMedium)
                 }
 
                 val listState = rememberLazyListState()
 
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                     items(
-                        items = uiState.frames,
-                        key = { "${it.timestamp}-${it.canId}-${it.data.contentHashCode()}" }
-                    ) { frame ->
-                        CanFrameRow(frame)
+                        items = uiState.logEntries
+                    ) { entry ->
+                        RawLogRow(entry.rawLine.trimEnd('\r', '\n'))
                     }
                 }
             }
@@ -194,39 +214,14 @@ fun DebugScreen(
 }
 
 @Composable
-private fun CanFrameRow(frame: CanFrame) {
-    val timeFormat = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }
-
-    Row(
+private fun RawLogRow(rawLine: String) {
+    Text(
+        text = rawLine,
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text(
-            timeFormat.format(Date(frame.timestamp)),
-            modifier = Modifier.width(100.dp),
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            frame.canIdHex(),
-            modifier = Modifier.width(64.dp),
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Text(
-            "[${frame.dlc}]",
-            modifier = Modifier.width(32.dp),
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace
-        )
-        Text(
-            frame.dataToHex(),
-            style = MaterialTheme.typography.bodySmall,
-            fontFamily = FontFamily.Monospace
-        )
-    }
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        color = MaterialTheme.colorScheme.tertiary
+    )
 }

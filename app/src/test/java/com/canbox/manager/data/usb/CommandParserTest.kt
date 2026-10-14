@@ -65,4 +65,16 @@ class CommandParserTest {
     @Test fun `getErrorMessage - returns null for non-error`() {
         assertNull(CommandParser.getErrorMessage("OK"))
     }
+
+    @Test fun `parseCanFrame - rejects invalid bytes and DLC mismatch`() {
+        assertNull(CommandParser.parseCanFrame("RX 0x123 [2]: 00 GG"))
+        assertNull(CommandParser.parseCanFrame("RX 0x123 [2]: 00"))
+    }
+
+    @Test fun `parseCanFrame - accepts exact DLC`() {
+        val frame = CommandParser.parseCanFrame("RX 0x123 [2]: 00 AB")
+        assertNotNull(frame)
+        assertEquals(0x123, frame!!.canId)
+        assertArrayEquals(byteArrayOf(0x00, 0xAB.toByte()), frame.data)
+    }
 }

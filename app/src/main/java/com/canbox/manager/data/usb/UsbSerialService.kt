@@ -6,42 +6,80 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.canbox.manager.MainActivity
 import com.canbox.manager.R
+import com.canbox.manager.data.repository.CanBoxRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import org.koin.android.ext.android.inject
 
 /**
- * Foreground service that keeps the process alive while the USB connection is active.
- * USB management is handled by the Koin-injected UsbSerialManager singleton — this
- * service only owns the foreground notification so Android does not kill the process
- * when the app goes to the background (e.g. during a debug session).
+ * Owns the long-lived USB process while the activity is backgrounded.
+ * The actual USB manager and CAN log writer are application-scoped through
+ * CanBoxRepository; this service keeps that process eligible to stay alive.
  */
 class UsbSerialService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "canbox_usb_channel"
-        const val NOTIFICATION_ID = 1
-        const val EXTRA_CONNECTED = "connected"
-        const val EXTRA_DEVICE_NAME = "device_name"
+        private const val NOTIFICATION_ID = 1
     }
 
-    override fun onBind(intent: Intent): IBinder? = null
+    private val repository: CanBoxRepository by inject()
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var reconnectJob: Job? = null
+    private val binder = LocalBinder()
+
+    inner class LocalBinder : Binder() {
+        fun getService(): UsbSerialService = this@UsbSerialService
+    }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
     }
 
+    override fun onBind(intent: Intent): IBinder = binder
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val connected = intent?.getBooleanExtra(EXTRA_CONNECTED, false) ?: false
-        val deviceName = intent?.getStringExtra(EXTRA_DEVICE_NAME)
-        startForeground(NOTIFICATION_ID, buildNotification(connected, deviceName))
-        return START_NOT_STICKY
+        startForeground(NOTIFICATION_ID, createNotification("Waiting for USB connection"))
+        ensureConnection()
+        return START_STICKY
+    }
+
+    private fun ensureConnection() {
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = serviceScope.launch {
+            delay(250)
+            repository.connect()
+
+            // If a capture was active before process recreation, wait for the
+            // USB permission/connection and resume it without the UI.
+            if (repository.isCanLoggingRequested()) {
+                repository.connectionState
+                    .filter { it.isConnected }
+                    .first()
+                repository.resumeCanLoggingIfRequested()
+            }
+        }
     }
 
     override fun onDestroy() {
+        reconnectJob?.cancel()
+        serviceScope.cancel()
+        // Do not release the repository here: the service may be recreated and
+        // the repository owns the application-scoped USB/logging resources.
         super.onDestroy()
     }
 
@@ -60,14 +98,14 @@ class UsbSerialService : Service() {
         }
     }
 
-    private fun buildNotification(connected: Boolean, deviceName: String?): Notification {
+    private fun createNotification(text: String): Notification {
         val pendingIntent = PendingIntent.getActivity(
-            this, 0,
+            this,
+            0,
             Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val text = if (connected) "Connected to ${deviceName ?: "USB Device"}"
-                   else "Waiting for USB connection"
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("CANBox Manager")
             .setContentText(text)
@@ -77,5 +115,15 @@ class UsbSerialService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
+    }
+
+    fun updateNotification(isConnected: Boolean, deviceName: String? = null) {
+        val text = if (isConnected) {
+            "Connected to ${deviceName ?: "USB Device"}"
+        } else {
+            "Waiting for USB connection"
+        }
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, createNotification(text))
     }
 }

@@ -1,53 +1,55 @@
 package com.canbox.manager.ui.screens.debug
 
+import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Context
-import android.os.Build
-import android.os.Environment
-import android.os.storage.StorageManager
-import android.os.storage.StorageVolume
+import android.content.Intent
+import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import com.canbox.manager.data.log.CanLogEntry
+import com.canbox.manager.data.log.ExternalLogExporter
+import com.canbox.manager.data.log.ExternalStoragePermissionRequired
 import com.canbox.manager.data.repository.CanBoxRepository
 import com.canbox.manager.data.usb.UsbConnectionState
-import com.canbox.manager.domain.model.CanFrame
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import java.io.BufferedWriter
+import kotlin.coroutines.coroutineContext
 import java.io.File
-import java.io.FileWriter
-import java.text.SimpleDateFormat
-import java.util.*
 
 data class DebugUiState(
     val isLogging: Boolean = false,
     val isPaused: Boolean = false,
-    val frames: List<CanFrame> = emptyList(),
+    val logEntries: List<CanLogEntry> = emptyList(),
     val totalFrames: Long = 0,
     val error: String? = null,
     val savedPath: String? = null,
-    val usbSavedPath: String? = null
+    val recoverablePaths: List<String> = emptyList(),
+    val isExporting: Boolean = false,
+    val storagePermissionRequired: Boolean = false,
+    val exportMessage: String? = null
 )
 
 class DebugViewModel(
     private val repository: CanBoxRepository,
-    private val appContext: Context
+    private val externalExporter: ExternalLogExporter,
+    private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
     companion object {
-        private const val DISPLAY_FRAMES = 200
-        private const val LOG_DIR = "canbox"
-        private const val TEMP_FILE_NAME = "canlog_tmp.txt"
-        private const val FLUSH_EVERY_N_FRAMES = 100
+        internal const val DISPLAY_FRAMES = 200
     }
-
-    private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
-    private val dateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
 
     val connectionState: StateFlow<UsbConnectionState> = repository.connectionState
         .stateIn(
@@ -58,167 +60,59 @@ class DebugViewModel(
 
     private val _uiState = MutableStateFlow(DebugUiState())
     val uiState: StateFlow<DebugUiState> = _uiState.asStateFlow()
+    private var pendingSnapshot: File?
+        get() = savedStateHandle.get<String>("pendingExternalExport")?.let(::File)
+        set(value) { savedStateHandle["pendingExternalExport"] = value?.absolutePath }
 
-    private var frameCollectionJob: kotlinx.coroutines.Job? = null
-
-    // Single mutex guards tempLogFile + tempLogWriter together — no split-brain possible
-    private val writerMutex = Mutex()
-    private var tempLogFile: File? = null
-    private var tempLogWriter: BufferedWriter? = null
-    private var framesWrittenToFile = 0L
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Public API
-    // ─────────────────────────────────────────────────────────────────────────
-
-    fun startLogging() {
-        if (_uiState.value.isLogging) return
-
+    init {
+        // Logging state and file persistence belong to the application-scoped
+        // repository, so destroying this screen cannot stop a capture session.
         viewModelScope.launch {
-            // 1. Open temp file — all failures reported to UI, state stays consistent
-            val openOk = withContext(Dispatchers.IO) {
-                try {
-                    safeCloseWriter()                               // close any stale writer
-                    val file = File(appContext.cacheDir, TEMP_FILE_NAME)
-                    writerMutex.withLock {
-                        tempLogFile = file
-                        framesWrittenToFile = 0L
-                        tempLogWriter = BufferedWriter(FileWriter(file, false))
-                        tempLogWriter!!.write("# CANBox log\n")
-                        tempLogWriter!!.write("# Time              CAN_ID  DLC  Data\n")
-                        tempLogWriter!!.flush()
-                    }
-                    true
-                } catch (e: Exception) {
-                    safeCloseWriter()
-                    _uiState.update { it.copy(error = "Cannot open log file: ${e.message}") }
-                    false
+            repository.canLoggingState.collect { logState ->
+                _uiState.update { state ->
+                    state.copy(
+                        isLogging = logState.isLogging,
+                        totalFrames = logState.totalFrames,
+                        error = logState.error ?: state.error,
+                        savedPath = savedStateHandle.get<String>("lastExportSnapshot")
+                            ?: logState.lastSavedFile?.absolutePath
+                            ?: logState.recoverableFiles.firstOrNull()?.absolutePath
+                            ?: state.savedPath,
+                        recoverablePaths = logState.recoverableFiles.map { it.absolutePath }
+                    )
                 }
             }
-            if (!openOk) return@launch
+        }
 
-            // 2. Start ESP32 CAN logging
+        viewModelScope.launch {
+            repository.logEntries.collect { entry ->
+                _uiState.update { state ->
+                    if (state.isPaused) {
+                        state
+                    } else {
+                        state.copy(
+                            logEntries = (listOf(entry) + state.logEntries)
+                                .take(DISPLAY_FRAMES)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun startLogging() {
+        // A new capture must resume the live display after a previous pause.
+        _uiState.update { it.copy(isPaused = false) }
+        viewModelScope.launch {
             repository.startCanLogging()
-                .onSuccess {
-                    _uiState.update { it.copy(isLogging = true, isPaused = false) }
-                    collectFrames()
-                }
-                .onFailure { e ->
-                    withContext(Dispatchers.IO) { safeCloseAndDeleteTemp() }
-                    _uiState.update { it.copy(error = "Start logging failed: ${e.message}") }
-                }
+                .onFailure { error -> _uiState.update { it.copy(error = "Start failed: ${error.message}") } }
         }
     }
 
     fun stopLogging() {
         viewModelScope.launch {
-            frameCollectionJob?.cancel()
-            frameCollectionJob?.join()
-
-            repository.stopCanLogging()   // best-effort — ignore failure (ESP might be disconnected)
-
-            withContext(Dispatchers.IO) { safeCloseAndDeleteTemp() }
-
-            _uiState.update { it.copy(isLogging = false) }
-        }
-    }
-
-    /**
-     * Clears the on-screen display AND truncates the temp file.
-     * A save after clear will only contain frames captured after this call.
-     */
-    fun clearFrames() {
-        _uiState.update { it.copy(frames = emptyList(), totalFrames = 0) }
-
-        viewModelScope.launch(Dispatchers.IO) {
-            writerMutex.withLock {
-                val file = tempLogFile ?: return@withLock
-                try {
-                    tempLogWriter?.close()
-                    tempLogWriter = BufferedWriter(FileWriter(file, false))   // append=false → truncate
-                    tempLogWriter!!.write("# CANBox log (cleared)\n")
-                    tempLogWriter!!.write("# Time              CAN_ID  DLC  Data\n")
-                    tempLogWriter!!.flush()
-                    framesWrittenToFile = 0L
-                } catch (e: Exception) {
-                    // Writer in bad state — null it out; collectFrames skips null writer gracefully
-                    try { tempLogWriter?.close() } catch (_: Exception) {}
-                    tempLogWriter = null
-                    _uiState.update { it.copy(error = "Clear failed: ${e.message}") }
-                }
-            }
-        }
-    }
-
-    fun saveToFile() {
-        viewModelScope.launch {
-            try {
-                val timestamp = dateFormat.format(Date())
-                val loggingActive = _uiState.value.isLogging
-
-                data class SaveResult(val file: File, val onUsb: Boolean)
-
-                val result: SaveResult = withContext(Dispatchers.IO) {
-
-                    // ── Step 1: flush ─────────────────────────────────────────
-                    writerMutex.withLock {
-                        try { tempLogWriter?.flush() } catch (_: Exception) {}
-                    }
-
-                    // ── Step 2: validate temp file ────────────────────────────
-                    val tempFile = writerMutex.withLock { tempLogFile }
-                        ?: throw Exception("No log file — start logging first")
-
-                    if (!tempFile.exists())
-                        throw Exception("Log file missing — it may have been deleted")
-                    if (tempFile.length() == 0L)
-                        throw Exception("No frames to save")
-
-                    // ── Step 3: copy to destination (USB > internal) ──────────
-                    val destFile = tryCopyToDestination(tempFile, timestamp)
-
-                    // ── Step 4: delete old temp ───────────────────────────────
-                    try { tempFile.delete() } catch (_: Exception) {}
-
-                    // ── Step 5: reopen temp if logging is still active ────────
-                    if (loggingActive) {
-                        val newTemp = File(appContext.cacheDir, TEMP_FILE_NAME)
-                        writerMutex.withLock {
-                            try {
-                                tempLogWriter?.close()
-                                tempLogFile = newTemp
-                                framesWrittenToFile = 0L
-                                tempLogWriter = BufferedWriter(FileWriter(newTemp, false))
-                                tempLogWriter!!.write("# CANBox log (continued after save)\n")
-                                tempLogWriter!!.write("# Time              CAN_ID  DLC  Data\n")
-                                tempLogWriter!!.flush()
-                            } catch (e: Exception) {
-                                // Reopen failed — logging to file paused, data already safe in destFile
-                                try { tempLogWriter?.close() } catch (_: Exception) {}
-                                tempLogWriter = null
-                                tempLogFile = null
-                                _uiState.update {
-                                    it.copy(error = "Log file paused after save: ${e.message}")
-                                }
-                            }
-                        }
-                    } else {
-                        writerMutex.withLock { tempLogFile = null }
-                    }
-
-                    SaveResult(file = destFile.first, onUsb = destFile.second)
-                }
-
-                _uiState.update {
-                    it.copy(
-                        savedPath    = if (!result.onUsb) result.file.absolutePath else null,
-                        usbSavedPath = if (result.onUsb)  result.file.absolutePath else null
-                    )
-                }
-
-            } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Save failed: ${e.message}") }
-            }
+            repository.stopCanLogging()
+                .onFailure { error -> _uiState.update { it.copy(error = "Stop failed: ${error.message}") } }
         }
     }
 
@@ -226,129 +120,120 @@ class DebugViewModel(
         _uiState.update { it.copy(isPaused = !it.isPaused) }
     }
 
+    fun clearFrames() {
+        _uiState.update {
+            it.copy(
+                logEntries = emptyList()
+            )
+        }
+    }
+
     fun clearMessages() {
-        _uiState.update { it.copy(error = null, savedPath = null, usbSavedPath = null) }
+        _uiState.update { it.copy(error = null, savedPath = null, exportMessage = null) }
     }
 
     fun setError(message: String) {
         _uiState.update { it.copy(error = message) }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Private helpers
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private fun collectFrames() {
-        frameCollectionJob = viewModelScope.launch {
+    fun saveToFile() {
+        if (_uiState.value.isExporting) return
+        _uiState.update { it.copy(isExporting = true, error = null, exportMessage = null) }
+        viewModelScope.launch {
             try {
-                repository.canFrames.collect { frame ->
-                    withContext(Dispatchers.IO) {
-                        writerMutex.withLock {
-                            try {
-                                tempLogWriter?.let { writer ->
-                                    val time = timeFormat.format(Date(frame.timestamp))
-                                    val id   = "0x%03X".format(frame.canId)
-                                    val data = frame.data.joinToString(" ") { "%02X".format(it) }
-                                    writer.write("$time  $id  [${frame.dlc}]  $data\n")
-                                    framesWrittenToFile++
-                                    if (framesWrittenToFile % FLUSH_EVERY_N_FRAMES == 0L) {
-                                        writer.flush()
-                                    }
-                                }
-                            } catch (_: Exception) {
-                                // Write failure — don't crash the collection loop; UI still updates
-                            }
-                        }
-                    }
-
-                    _uiState.update { state ->
-                        val newFrames = if (!state.isPaused) {
-                            (listOf(frame) + state.frames).take(DISPLAY_FRAMES)
-                        } else {
-                            state.frames
-                        }
-                        state.copy(frames = newFrames, totalFrames = state.totalFrames + 1)
-                    }
-                }
+                val snapshot = repository.saveCanLog().getOrThrow()
+                savedStateHandle["lastExportSnapshot"] = snapshot.absolutePath
+                _uiState.update { it.copy(savedPath = snapshot.absolutePath) }
+                exportSnapshot(snapshot)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                setError("Export impossible : ${error.message}")
             } finally {
-                withContext(NonCancellable + Dispatchers.IO) {
-                    writerMutex.withLock {
-                        try { tempLogWriter?.flush() } catch (_: Exception) {}
-                    }
-                }
+                _uiState.update { it.copy(isExporting = false) }
             }
         }
     }
 
-    /**
-     * Tries USB drive first. Falls back to internal/external storage on any USB error.
-     * Returns (destFile, onUsb).
-     * Throws only if both destinations fail.
-     */
-    private fun tryCopyToDestination(src: File, timestamp: String): Pair<File, Boolean> {
-        val usbRoot = findUsbVolume()
-        if (usbRoot != null) {
+    private suspend fun exportSnapshot(snapshot: File) {
+        try {
+            val destination = withContext(Dispatchers.IO) {
+                val jobContext = coroutineContext
+                externalExporter.export(snapshot) { jobContext.ensureActive() }
+            }
+            _uiState.update {
+                it.copy(exportMessage = if (destination != null) {
+                    "Log complet copié sur stockage externe : ${destination.absolutePath}"
+                } else {
+                    "Aucune clé USB / SD montée. Log complet sauvegardé localement."
+                })
+            }
+        } catch (_: ExternalStoragePermissionRequired) {
+            pendingSnapshot = snapshot
+            _uiState.update { it.copy(storagePermissionRequired = true) }
+        }
+    }
+
+    fun storagePermissionOpened() {
+        _uiState.update { it.copy(storagePermissionRequired = false) }
+    }
+
+    fun onStoragePermissionResult(granted: Boolean) {
+        val snapshot = pendingSnapshot ?: return
+        pendingSnapshot = null
+        if (!granted) {
+            setError("Accès aux fichiers non autorisé. Copie locale conservée ; export USB / SD impossible.")
+            return
+        }
+        if (!snapshot.isFile) {
+            setError("Le fichier local à exporter n’est plus disponible. Relancer la sauvegarde.")
+            return
+        }
+        savedStateHandle["lastExportSnapshot"] = snapshot.absolutePath
+        _uiState.update { it.copy(savedPath = snapshot.absolutePath) }
+        _uiState.update { it.copy(isExporting = true) }
+        viewModelScope.launch {
             try {
-                val dir  = File(usbRoot, LOG_DIR).also { it.mkdirs() }
-                val dest = File(dir, "canlog_$timestamp.txt")
-                src.copyTo(dest, overwrite = true)
-                return dest to true
-            } catch (_: Exception) {
-                // USB failed (disconnected, full…) — fall through to internal
+                exportSnapshot(snapshot)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                setError("Export externe impossible : ${error.message}. Copie locale conservée.")
+            } finally {
+                _uiState.update { it.copy(isExporting = false) }
             }
         }
-        val dir  = getSaveDirectory().also { it.mkdirs() }
-        val dest = File(dir, "canlog_$timestamp.txt")
-        src.copyTo(dest, overwrite = true)   // throws if this also fails → caught by saveToFile()
-        return dest to false
     }
 
-    private fun getSaveDirectory(): File =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            File(appContext.getExternalFilesDir(null), LOG_DIR)
-        } else {
-            File(Environment.getExternalStorageDirectory(), LOG_DIR)
+    fun sendSavedLogByEmail(context: Context) {
+        val path = _uiState.value.savedPath
+        if (path == null) {
+            setError("Save the log before sending it")
+            return
         }
 
-    /**
-     * Returns the root of the first mounted, writable, removable storage volume (USB drive).
-     */
-    private fun findUsbVolume(): File? {
-        val sm = appContext.getSystemService(StorageManager::class.java) ?: return null
-        for (vol in sm.storageVolumes) {
-            if (!vol.isRemovable || vol.state != Environment.MEDIA_MOUNTED) continue
-            val root = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                vol.directory
-            } else {
-                try { File(StorageVolume::class.java.getMethod("getPath").invoke(vol) as String) }
-                catch (_: Exception) { null }
+        try {
+            val file = File(path)
+            if (!file.isFile) throw IllegalStateException("Saved log file is unavailable")
+
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "CANBox log - ${file.name}")
+                putExtra(Intent.EXTRA_TEXT, "CANBox log attached: ${file.name}")
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = ClipData.newRawUri("CANBox log", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            if (root != null && root.exists() && root.canWrite()) return root
-        }
-        return null
-    }
-
-    /** Close + null the writer. Always safe to call (swallows exceptions). */
-    private suspend fun safeCloseWriter() {
-        writerMutex.withLock {
-            try { tempLogWriter?.flush() } catch (_: Exception) {}
-            try { tempLogWriter?.close() } catch (_: Exception) {}
-            tempLogWriter = null
-        }
-    }
-
-    /** Close writer + delete temp file + null both. Always safe to call. */
-    private suspend fun safeCloseAndDeleteTemp() {
-        safeCloseWriter()
-        try { tempLogFile?.delete() } catch (_: Exception) {}
-        writerMutex.withLock { tempLogFile = null }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        frameCollectionJob?.cancel()
-        runBlocking {
-            safeCloseAndDeleteTemp()
+            context.startActivity(Intent.createChooser(sendIntent, "Send CAN log"))
+        } catch (_: ActivityNotFoundException) {
+            setError("No email application is available")
+        } catch (error: Exception) {
+            setError("Email export failed: ${error.message}")
         }
     }
 }

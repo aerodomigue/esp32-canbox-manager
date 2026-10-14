@@ -1,16 +1,12 @@
 package com.canbox.manager
 
-import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.result.contract.ActivityResultContracts
-import com.canbox.manager.data.usb.UsbSerialService
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
@@ -20,6 +16,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -38,6 +35,7 @@ import com.canbox.manager.data.github.GitHubRepository
 import com.canbox.manager.data.repository.CanBoxRepository
 import com.canbox.manager.util.isNewerVersion
 import com.canbox.manager.data.usb.UsbConnectionState
+import com.canbox.manager.data.usb.UsbSerialService
 import com.canbox.manager.ui.navigation.AppNavHost
 import com.canbox.manager.ui.navigation.TopNavigationBar
 import com.canbox.manager.ui.theme.CANBoxManagerTheme
@@ -50,15 +48,10 @@ class MainActivity : ComponentActivity() {
 
     private val repository: CanBoxRepository by inject()
 
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* result handled per-screen where needed */ }
-
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> connectAsync()
-                UsbManager.ACTION_USB_DEVICE_DETACHED -> repository.disconnect()
             }
         }
     }
@@ -66,48 +59,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Start foreground service so Android won't kill the process in background
-        startUsbService(connected = false)
-
-        // Request storage permission upfront (API <= 29 only — Android 10 and below)
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            val perm = Manifest.permission.WRITE_EXTERNAL_STORAGE
-            if (checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED) {
-                permissionLauncher.launch(arrayOf(perm))
-            }
-        }
-
-        // Update service notification when USB connection state changes
-        lifecycleScope.launch {
-            repository.connectionState.collect { state ->
-                when (state) {
-                    is UsbConnectionState.Connected ->
-                        startUsbService(connected = true, deviceName = state.deviceName)
-                    else ->
-                        startUsbService(connected = false)
-                }
-            }
-        }
-
         // Enable full screen immersive mode
         hideSystemBars()
+        startUsbService()
 
         setContent {
             CANBoxManagerTheme {
                 MainScreen(repository)
             }
-        }
-    }
-
-    private fun startUsbService(connected: Boolean, deviceName: String? = null) {
-        val intent = Intent(this, UsbSerialService::class.java).apply {
-            putExtra(UsbSerialService.EXTRA_CONNECTED, connected)
-            putExtra(UsbSerialService.EXTRA_DEVICE_NAME, deviceName)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
         }
     }
 
@@ -127,10 +86,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Register USB receiver for attach/detach while app is open
+        // The application-scoped serial manager handles detach even in background.
         val filter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
-            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -152,10 +110,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        repository.release()
-        stopService(Intent(this, UsbSerialService::class.java))
+    private fun startUsbService() {
+        val serviceIntent = Intent(this, UsbSerialService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
     }
 }
 

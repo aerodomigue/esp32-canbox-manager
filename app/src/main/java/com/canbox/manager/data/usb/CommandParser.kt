@@ -341,10 +341,10 @@ object CommandParser {
         val dlc = match.groupValues[3].toIntOrNull() ?: return null
         val dataStr = match.groupValues[4].trim()
 
-        val data = dataStr.split(" ")
-            .filter { it.isNotEmpty() }
-            .mapNotNull { it.toIntOrNull(16)?.toByte() }
-            .toByteArray()
+        val byteTokens = dataStr.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (byteTokens.any { !it.matches(Regex("[0-9A-Fa-f]{2}")) }) return null
+        val data = byteTokens.map { it.toInt(16).toByte() }.toByteArray()
+        if (data.size != dlc) return null
 
         return CanFrame(
             timestamp = timestamp,
