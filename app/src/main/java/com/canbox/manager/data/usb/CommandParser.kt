@@ -156,7 +156,8 @@ object CommandParser {
 
     /**
      * Parse lights string format: "H=1 P=0 HB=0 L=0 R=0"
-     * H=Hazard, P=Parking, HB=HighBeam, L=Left, R=Right
+     * H=LowBeam, P=Parking, HB=HighBeam, L=Left, R=Right.
+     * The firmware does not report a hazard flag in this text format.
      * Also supports hex format: "0x04"
      */
     private fun parseLightsString(value: String): LightStatus {
@@ -167,7 +168,6 @@ object CommandParser {
 
         // Parse key=value format: "H=1 P=0 HB=0 L=0 R=0"
         val parts = value.split(" ")
-        var hazard = false
         var parking = false
         var highBeam = false
         var lowBeam = false
@@ -179,10 +179,9 @@ object CommandParser {
             if (kv.size != 2) continue
             val isOn = kv[1] == "1"
             when (kv[0]) {
-                "H" -> hazard = isOn
+                "H", "LB" -> lowBeam = isOn
                 "P" -> parking = isOn
                 "HB" -> highBeam = isOn
-                "LB" -> lowBeam = isOn
                 "L" -> leftIndicator = isOn
                 "R" -> rightIndicator = isOn
             }
@@ -193,8 +192,7 @@ object CommandParser {
             lowBeam = lowBeam,
             highBeam = highBeam,
             leftIndicator = leftIndicator,
-            rightIndicator = rightIndicator,
-            hazard = hazard
+            rightIndicator = rightIndicator
         )
     }
 
