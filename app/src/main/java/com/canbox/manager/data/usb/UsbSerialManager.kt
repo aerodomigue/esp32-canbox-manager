@@ -255,20 +255,31 @@ class UsbSerialManager(
         Log.d(TAG, "Disconnected")
     }
 
-    suspend fun sendCommand(command: String, timeoutMs: Long = 2000L): Result<String> =
+    suspend fun sendCommand(
+        command: String,
+        timeoutMs: Long = 2000L,
+        expectedSessionId: Long? = null
+    ): Result<String> =
         commandMutex.withLock {
-            val port = serialPort ?: return@withLock Result.failure(IOException("Not connected"))
-
             withContext(Dispatchers.IO) {
                 val responseChannel = Channel<String>(1)
                 var timedOut = false
                 try {
                     synchronized(this@UsbSerialManager) {
+                        // Connection changes use this same monitor. Validate and
+                        // write together so a queued reset cannot target a new ESP.
+                        ensureActive()
+                        if (expectedSessionId != null &&
+                            (_connectionState.value as? UsbConnectionState.Connected)?.sessionId != expectedSessionId
+                        ) {
+                            throw IOException("USB session changed; read calibration again")
+                        }
+                        val port = serialPort ?: throw IOException("Not connected")
                         responseBuffer.begin(command)
                         pendingResponseChannel = responseChannel
+                        port.write("$command\n".toByteArray(), WRITE_TIMEOUT_MS)
                     }
 
-                    port.write("$command\n".toByteArray(), WRITE_TIMEOUT_MS)
                     val response = withTimeoutOrNull(timeoutMs) {
                         responseChannel.receive()
                     }
@@ -283,6 +294,8 @@ class UsbSerialManager(
                     } else {
                         Result.success(response)
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "Send command failed: $command", e)
                     Result.failure(e)

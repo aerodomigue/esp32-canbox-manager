@@ -253,10 +253,8 @@ private fun ConfigFileItem(
             }
 
             Row {
-                if (!file.isActive) {
-                    TextButton(onClick = onLoad) {
-                        Text("Load")
-                    }
+                TextButton(onClick = onLoad) {
+                    Text(if (file.isActive) "Reload" else "Load")
                 }
                 IconButton(onClick = { showDeleteDialog = true }) {
                     Icon(

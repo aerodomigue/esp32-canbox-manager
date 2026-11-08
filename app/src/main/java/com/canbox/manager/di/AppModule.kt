@@ -3,6 +3,7 @@ package com.canbox.manager.di
 import com.canbox.manager.data.github.GitHubApi
 import com.canbox.manager.data.github.GitHubRepository
 import com.canbox.manager.data.repository.CanBoxRepository
+import com.canbox.manager.domain.repository.CalibrationRepository
 import com.canbox.manager.data.log.ExternalLogExporter
 import com.canbox.manager.data.usb.UsbSerialManager
 import com.canbox.manager.ui.screens.calibration.CalibrationViewModel
@@ -46,6 +47,7 @@ val appModule = module {
 
     // Repositories
     single { CanBoxRepository(get(), androidContext()) }
+    single<CalibrationRepository> { get<CanBoxRepository>() }
     single { ExternalLogExporter(androidContext()) }
     single { GitHubRepository(get()) }
 

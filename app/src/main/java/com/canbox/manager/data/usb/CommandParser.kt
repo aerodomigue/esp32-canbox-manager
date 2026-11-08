@@ -211,43 +211,65 @@ object CommandParser {
      */
     fun parseCfgList(response: String): CalibrationConfig {
         val lines = response.lines()
-        var steeringOffset = 0
-        var steeringScale = 300
-        var steeringInvert = false
-        var indicatorTimeout = 500
-        var rpmDivisor = 7
-        var tankCapacity = 45
-        var dteDivisor = 283
+        val errorLine = lines.firstOrNull { it.trimStart().startsWith("ERROR") }
+        require(errorLine == null) { "CFG LIST failed: ${errorLine?.trim()}" }
+
+        val ranges = mapOf(
+            "steerOffset" to CalibrationConfig.STEERING_OFFSET_RANGE,
+            "steerScale" to CalibrationConfig.STEERING_SCALE_RANGE,
+            "steerInvert" to 0..1,
+            "indTimeout" to CalibrationConfig.INDICATOR_TIMEOUT_RANGE,
+            "rpmDiv" to CalibrationConfig.RPM_DIVISOR_RANGE,
+            "tankCap" to CalibrationConfig.TANK_CAPACITY_RANGE,
+            "dteDiv" to CalibrationConfig.DTE_DIVISOR_RANGE
+        )
+        val values = mutableMapOf<String, Int>()
+        val assignment = Regex("""([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)""")
+        val numberWithDescription = Regex("""([+-]?[0-9]+)\s*(?:\([^()]*\))?""")
 
         for (line in lines) {
-            // Parse format: "paramName = value (description)"
-            val equalsIndex = line.indexOf('=')
-            if (equalsIndex == -1) continue
-
-            val paramName = line.substring(0, equalsIndex).trim()
-            val valueAndDesc = line.substring(equalsIndex + 1).trim()
-            // Extract just the number before any description in parentheses
-            val valueStr = valueAndDesc.split(" ", "(").first().trim()
-
-            when (paramName) {
-                "steerOffset" -> steeringOffset = valueStr.toIntOrNull() ?: 0
-                "steerScale" -> steeringScale = valueStr.toIntOrNull() ?: 300
-                "steerInvert" -> steeringInvert = valueStr == "1"
-                "indTimeout" -> indicatorTimeout = valueStr.toIntOrNull() ?: 500
-                "rpmDiv" -> rpmDivisor = valueStr.toIntOrNull() ?: 7
-                "tankCap" -> tankCapacity = valueStr.toIntOrNull() ?: 45
-                "dteDiv" -> dteDivisor = valueStr.toIntOrNull() ?: 283
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || trimmed == "=== Current Configuration ===" ||
+                trimmed == "=============================" || trimmed == "OK" ||
+                trimmed == "CFG LIST"
+            ) {
+                continue
             }
+
+            val match = assignment.matchEntire(trimmed)
+                ?: throw IllegalArgumentException("CFG LIST invalid parameter line: $trimmed")
+            val paramName = match.groupValues[1]
+            // Future firmware may report additional parameters with other value types.
+            val range = ranges[paramName] ?: continue
+            require(paramName !in values) { "CFG LIST duplicate parameter: $paramName" }
+
+            val valueAndDesc = match.groupValues[2].trim()
+            val valueStr = numberWithDescription.matchEntire(valueAndDesc)?.groupValues?.get(1)
+                ?: throw IllegalArgumentException("CFG LIST invalid value for $paramName: '$valueAndDesc'")
+            if (paramName == "steerInvert") {
+                require(valueStr == "0" || valueStr == "1") {
+                    "CFG LIST invalid value for steerInvert: '$valueStr' (expected 0 or 1)"
+                }
+            }
+            val value = valueStr.toIntOrNull()
+                ?: throw IllegalArgumentException("CFG LIST invalid integer for $paramName: '$valueStr'")
+            require(value in range) {
+                "CFG LIST value out of range for $paramName: $value (expected $range)"
+            }
+            values[paramName] = value
         }
 
+        val missing = ranges.keys - values.keys
+        require(missing.isEmpty()) { "CFG LIST missing required parameters: ${missing.joinToString()}" }
+
         return CalibrationConfig(
-            steeringOffset = steeringOffset,
-            steeringScale = steeringScale,
-            steeringInvert = steeringInvert,
-            indicatorTimeout = indicatorTimeout,
-            rpmDivisor = rpmDivisor,
-            tankCapacity = tankCapacity,
-            dteDivisor = dteDivisor
+            steeringOffset = values.getValue("steerOffset"),
+            steeringScale = values.getValue("steerScale"),
+            steeringInvert = values.getValue("steerInvert") == 1,
+            indicatorTimeout = values.getValue("indTimeout"),
+            rpmDivisor = values.getValue("rpmDiv"),
+            tankCapacity = values.getValue("tankCap"),
+            dteDivisor = values.getValue("dteDiv")
         )
     }
 

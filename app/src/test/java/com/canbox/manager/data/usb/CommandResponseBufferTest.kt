@@ -64,7 +64,7 @@ class CommandResponseBufferTest {
         assertEquals("OK READY", replies.append("OK READY\n"))
         replies.begin("SYS DATA")
         assertEquals("ERROR: unavailable", replies.append("ERROR: unavailable\n"))
-        replies.begin("CFG LIST")
+        replies.begin("CFG GET rpmDiv")
         assertNull(replies.append("value=1\n>"))
         assertEquals("value=1\n>", replies.append(" "))
         replies.begin("OTA ABORT")
@@ -90,7 +90,7 @@ class CommandResponseBufferTest {
     fun `prompt followed by ODB in the same read is independent of fragmentation`() {
         val stream = "value=1\n> ODB STATE ready\n"
         for (split in 0..stream.length) {
-            val replies = CommandResponseBuffer().apply { begin("CFG LIST") }
+            val replies = CommandResponseBuffer().apply { begin("CFG GET rpmDiv") }
             val results = listOfNotNull(
                 replies.append(stream.take(split)),
                 replies.append(stream.drop(split))
@@ -105,5 +105,33 @@ class CommandResponseBufferTest {
         assertNull(lines.append("ODB RX value=1\r").firstOrNull())
         assertEquals(listOf("ODB RX value=1\r\n"), lines.append("\nRX 0x123"))
         assertEquals(listOf("RX 0x123 [1]: 00\n"), lines.append(" [1]: 00\n"))
+    }
+
+    @Test
+    fun `calibration ignores previous status and prompt at every chunk boundary`() {
+        val header = "=== Current Configuration ===\r\n"
+        val footer = "=============================\r\n"
+        val fields = "steerOffset = 0\nsteerScale = 500\nsteerInvert = 1\n" +
+            "indTimeout = 500\nrpmDiv = 8\ntankCap = 45\ndteDiv = 338\n"
+        val stream = "Configuration saved to NVS\r\n> OK\n" + header +
+            "RX 0x180 [8]: 14 18 00 00 00 00 00 00 | t_ms=508 ext=0 rtr=0\n" +
+            "ODB RX pid=05 value=90\n" + fields + footer + "> "
+        for (split in 0..stream.length) {
+            val replies = CommandResponseBuffer().apply { begin("CFG LIST") }
+            val results = listOfNotNull(replies.append(stream.take(split)), replies.append(stream.drop(split)))
+            assertEquals(listOf((header + fields + footer).trim()), results, "Split at $split")
+            assertEquals(500, CommandParser.parseCfgList(results.single()).steeringScale)
+        }
+    }
+
+    @Test
+    fun `calibration waits for its complete footer and propagates errors`() {
+        val replies = CommandResponseBuffer().apply { begin("CFG LIST") }
+        assertNull(replies.append("=============================\n> OK\n"))
+        assertNull(replies.append("=== Current Configuration ===\nsteerOffset = 0\n> OK\n"))
+        assertNull(replies.append("============================="))
+        assertEquals("=== Current Configuration ===\nsteerOffset = 0\nOK\n=============================", replies.append("\n"))
+        replies.begin("CFG LIST")
+        assertEquals("ERROR: unavailable", replies.append("ERROR: unavailable\n"))
     }
 }

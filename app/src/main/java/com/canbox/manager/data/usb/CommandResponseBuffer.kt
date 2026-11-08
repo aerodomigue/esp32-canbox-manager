@@ -9,6 +9,7 @@ internal class CommandResponseBuffer {
     private val response = StringBuilder()
     private var command: String? = null
     private var dashboardStarted = false
+    private var configurationStarted = false
     private var responseLines = 0
 
     fun begin(command: String) {
@@ -19,6 +20,7 @@ internal class CommandResponseBuffer {
         ignorePendingLine = pendingLine.isNotEmpty()
         response.clear()
         dashboardStarted = false
+        configurationStarted = false
         responseLines = 0
     }
 
@@ -58,6 +60,14 @@ internal class CommandResponseBuffer {
         val line = rawLine.trim()
         val isError = line.startsWith("ERROR")
         val isDashboard = activeCommand == "SYS DATA"
+        val isConfiguration = activeCommand == "CFG LIST"
+        // CFG SAVE/RESET and CAN RELOAD print status text after OK. Their late
+        // text/prompt must not complete or contaminate the following CFG LIST.
+        if (isConfiguration && isPrompt) return null
+        if (isConfiguration && !configurationStarted && !isError) {
+            if (line != "=== Current Configuration ===") return null
+            configurationStarted = true
+        }
         if (isDashboard && isPrompt) return null
         if (isDashboard && !dashboardStarted && !isError) {
             if (line != "=== Live Vehicle Data ===") return null
@@ -65,7 +75,9 @@ internal class CommandResponseBuffer {
         }
         response.append(rawLine)
         responseLines++
-        val done = if (isDashboard) {
+        val done = if (isConfiguration) {
+            isError || (configurationStarted && line == "=============================")
+        } else if (isDashboard) {
             isError || (dashboardStarted && line == "=========================")
         } else {
             // OTA aborted intentionally is not a terminal response.
