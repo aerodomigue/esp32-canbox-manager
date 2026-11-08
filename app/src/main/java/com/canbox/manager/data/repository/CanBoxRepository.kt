@@ -11,6 +11,7 @@ import com.canbox.manager.data.usb.UsbConnectionState
 import com.canbox.manager.data.usb.UsbSerialManager
 import com.canbox.manager.data.usb.crc32Hex
 import com.canbox.manager.domain.model.*
+import com.canbox.manager.domain.repository.CalibrationRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
@@ -20,7 +21,7 @@ import java.io.File
 class CanBoxRepository(
     private val usbManager: UsbSerialManager,
     appContext: Context
-) {
+) : CalibrationRepository {
     companion object {
         private const val TAG = "CanBoxRepository"
         private const val LOGGING_REQUESTED_KEY = "logging_requested"
@@ -33,13 +34,14 @@ class CanBoxRepository(
         } ?: File(appContext.filesDir, "canbox")
     )
     private val loggingMutex = Mutex()
+    private val calibrationMutex = Mutex()
     private val loggingPreferences = appContext.getSharedPreferences(
         "canbox_logging",
         Context.MODE_PRIVATE
     )
 
     // Connection state
-    val connectionState: StateFlow<UsbConnectionState> = usbManager.connectionState
+    override val connectionState: StateFlow<UsbConnectionState> = usbManager.connectionState
 
     // Vehicle data polling
     private val _vehicleData = MutableStateFlow(VehicleData())
@@ -140,14 +142,17 @@ class CanBoxRepository(
     }
 
     // Calibration commands
-    suspend fun getCalibration(): Result<CalibrationConfig> {
-        return usbManager.sendCommand("CFG LIST").map { response ->
+    override suspend fun <T> withCalibrationOperation(action: suspend () -> T): T =
+        calibrationMutex.withLock { action() }
+
+    override suspend fun getCalibration(sessionId: Long): Result<CalibrationConfig> {
+        return usbManager.sendCommand("CFG LIST", expectedSessionId = sessionId).mapCatching { response ->
             CommandParser.parseCfgList(response)
         }
     }
 
-    suspend fun setCalibration(param: String, value: Int): Result<Unit> {
-        return usbManager.sendCommand("CFG SET $param $value").fold(
+    override suspend fun setCalibration(param: String, value: Int, sessionId: Long): Result<Unit> {
+        return usbManager.sendCommand("CFG SET $param $value", expectedSessionId = sessionId).fold(
             onSuccess = { response ->
                 if (CommandParser.isSuccess(response)) {
                     Result.success(Unit)
@@ -159,8 +164,8 @@ class CanBoxRepository(
         )
     }
 
-    suspend fun saveCalibration(): Result<Unit> {
-        return usbManager.sendCommand("CFG SAVE").fold(
+    override suspend fun saveCalibration(sessionId: Long): Result<Unit> {
+        return usbManager.sendCommand("CFG SAVE", expectedSessionId = sessionId).fold(
             onSuccess = { response ->
                 if (CommandParser.isSuccess(response)) {
                     Result.success(Unit)
@@ -172,8 +177,8 @@ class CanBoxRepository(
         )
     }
 
-    suspend fun resetCalibration(): Result<Unit> {
-        return usbManager.sendCommand("CFG RESET").fold(
+    override suspend fun resetCalibration(sessionId: Long): Result<Unit> {
+        return usbManager.sendCommand("CFG RESET", expectedSessionId = sessionId).fold(
             onSuccess = { response ->
                 if (CommandParser.isSuccess(response)) {
                     Result.success(Unit)
@@ -186,6 +191,14 @@ class CanBoxRepository(
     }
 
     // CAN config commands
+    override suspend fun reloadVehicleCalibration(sessionId: Long): Result<Unit> {
+        return usbManager.sendCommand("CAN RELOAD", expectedSessionId = sessionId).mapCatching { response ->
+            check(!CommandParser.isError(response) && CommandParser.isSuccess(response)) {
+                CommandParser.getErrorMessage(response) ?: "Vehicle profile reload failed"
+            }
+        }
+    }
+
     suspend fun getCanStatus(): Result<CanConfigStatus> {
         // Get status first
         val statusResult = usbManager.sendCommand("CAN STATUS")
@@ -217,8 +230,8 @@ class CanBoxRepository(
         )
     }
 
-    suspend fun loadCanConfig(filename: String): Result<Unit> {
-        return usbManager.sendCommand("CAN LOAD $filename").map {
+    suspend fun loadCanConfig(filename: String): Result<Unit> = calibrationMutex.withLock {
+        usbManager.sendCommand("CAN LOAD $filename").mapCatching {
             if (!CommandParser.isSuccess(it)) {
                 throw Exception(CommandParser.getErrorMessage(it) ?: "Load failed")
             }

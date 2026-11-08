@@ -25,13 +25,17 @@ fun CalibrationScreen(
     val connectionState by viewModel.connectionState.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
 
-    LaunchedEffect(connectionState.isConnected) {
+    LaunchedEffect(Unit) {
         if (connectionState.isConnected) {
             viewModel.loadConfig()
         }
     }
 
-    var showResetDialog by remember { mutableStateOf(false) }
+    var showResetDialog by remember(connectionState) { mutableStateOf(false) }
+    var showRestoreDialog by remember(connectionState) { mutableStateOf(false) }
+    val canOperate = connectionState.isConnected && !uiState.isBusy
+    val config = uiState.config
+    val canEdit = canOperate && config != null
 
     Column(
         modifier = Modifier
@@ -96,77 +100,106 @@ fun CalibrationScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Steering section
-            Text(
-                "Steering",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            CalibrationItem(
-                label = "Steering Offset",
-                value = uiState.config.steeringOffset,
-                range = CalibrationConfig.STEERING_OFFSET_RANGE,
-                onValueChange = { viewModel.updateSteeringOffset(it) }
-            )
-
-            CalibrationItem(
-                label = "Steering Scale (×0.0001)",
-                value = uiState.config.steeringScale,
-                range = CalibrationConfig.STEERING_SCALE_RANGE,
-                onValueChange = { viewModel.updateSteeringScale(it) }
-            )
-
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Steering Invert", style = MaterialTheme.typography.bodyMedium)
-                Switch(
-                    checked = uiState.config.steeringInvert,
-                    onCheckedChange = { viewModel.updateSteeringInvert(it) }
+                Text("Current ESP values", style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = { viewModel.loadConfig() }, enabled = canOperate) {
+                    Text("Read from ESP")
+                }
+            }
+            Text(
+                "NVS save does not edit the vehicle JSON. On supported firmware, explicit JSON " +
+                    "values take priority again on profile load, reload or ESP restart.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (config == null) {
+                Text(if (connectionState.isConnected) "Read the ESP configuration before editing." else "Connect the ESP to read calibration.")
+            } else {
+                // Steering section
+                Text(
+                    "Steering",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                CalibrationItem(
+                    label = "Steering Offset",
+                    value = config.steeringOffset,
+                    enabled = canEdit,
+                    range = CalibrationConfig.STEERING_OFFSET_RANGE,
+                    onValueChange = { viewModel.updateSteeringOffset(it) }
+                )
+
+                CalibrationItem(
+                    label = "Steering Scale (×0.0001)",
+                    value = config.steeringScale,
+                    enabled = canEdit,
+                    range = CalibrationConfig.STEERING_SCALE_RANGE,
+                    onValueChange = { viewModel.updateSteeringScale(it) }
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Steering Invert", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = config.steeringInvert,
+                        enabled = canEdit,
+                        onCheckedChange = { viewModel.updateSteeringInvert(it) }
+                    )
+                }
+
+                CalibrationItem(
+                    label = "Indicator Timeout (ms)",
+                    value = config.indicatorTimeout,
+                    enabled = canEdit,
+                    range = CalibrationConfig.INDICATOR_TIMEOUT_RANGE,
+                    onValueChange = { viewModel.updateIndicatorTimeout(it) }
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                // Engine & Fuel section
+                Text(
+                    "Engine & Fuel",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                CalibrationItem(
+                    label = "RPM Divisor",
+                    value = config.rpmDivisor,
+                    enabled = canEdit,
+                    range = CalibrationConfig.RPM_DIVISOR_RANGE,
+                    onValueChange = { viewModel.updateRpmDivisor(it) }
+                )
+
+                CalibrationItem(
+                    label = "Tank Capacity (L)",
+                    value = config.tankCapacity,
+                    enabled = canEdit,
+                    range = CalibrationConfig.TANK_CAPACITY_RANGE,
+                    onValueChange = { viewModel.updateTankCapacity(it) }
+                )
+
+                CalibrationItem(
+                    label = "DTE Divisor (x100)",
+                    value = config.dteDivisor,
+                    enabled = canEdit,
+                    range = CalibrationConfig.DTE_DIVISOR_RANGE,
+                    onValueChange = { viewModel.updateDteDivisor(it) }
                 )
             }
-
-            CalibrationItem(
-                label = "Indicator Timeout (ms)",
-                value = uiState.config.indicatorTimeout,
-                range = CalibrationConfig.INDICATOR_TIMEOUT_RANGE,
-                onValueChange = { viewModel.updateIndicatorTimeout(it) }
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            // Engine & Fuel section
-            Text(
-                "Engine & Fuel",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary
-            )
-
-            CalibrationItem(
-                label = "RPM Divisor",
-                value = uiState.config.rpmDivisor,
-                range = CalibrationConfig.RPM_DIVISOR_RANGE,
-                onValueChange = { viewModel.updateRpmDivisor(it) }
-            )
-
-            CalibrationItem(
-                label = "Tank Capacity (L)",
-                value = uiState.config.tankCapacity,
-                range = CalibrationConfig.TANK_CAPACITY_RANGE,
-                onValueChange = { viewModel.updateTankCapacity(it) }
-            )
-
-            CalibrationItem(
-                label = "DTE Divisor (x100)",
-                value = uiState.config.dteDivisor,
-                range = CalibrationConfig.DTE_DIVISOR_RANGE,
-                onValueChange = { viewModel.updateDteDivisor(it) }
-            )
+            TextButton(onClick = { showResetDialog = true }, enabled = canOperate) {
+                Text("Factory reset…", color = MaterialTheme.colorScheme.error)
+            }
         }
 
         Spacer(Modifier.height(16.dp))
@@ -177,17 +210,17 @@ fun CalibrationScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)
         ) {
             OutlinedButton(
-                onClick = { showResetDialog = true },
-                enabled = !uiState.isSaving
+                onClick = { showRestoreDialog = true },
+                enabled = canOperate
             ) {
                 Icon(Icons.Filled.RestartAlt, null)
                 Spacer(Modifier.width(8.dp))
-                Text("Reset")
+                Text("Reload vehicle profile")
             }
 
             Button(
                 onClick = { viewModel.saveToNvs() },
-                enabled = uiState.hasChanges && !uiState.isSaving
+                enabled = canEdit && uiState.hasChanges
             ) {
                 Icon(Icons.Filled.Save, null)
                 Spacer(Modifier.width(8.dp))
@@ -196,16 +229,41 @@ fun CalibrationScreen(
         }
     }
 
-    if (showResetDialog) {
+    if (showRestoreDialog && canOperate) {
+        AlertDialog(
+            onDismissRequest = { showRestoreDialog = false },
+            title = { Text("Reload vehicle profile?") },
+            text = {
+                Text("Discard unsaved edits and send CAN RELOAD. On compatible ESP firmware, " +
+                    "explicit vehicleParams in the selected JSON replace the current values. " +
+                    "Missing or null parameters keep their current values. This is not a factory reset.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRestoreDialog = false
+                    viewModel.restoreVehicleValues()
+                }) { Text("Reload") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestoreDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showResetDialog && canOperate) {
         AlertDialog(
             onDismissRequest = { showResetDialog = false },
-            title = { Text("Reset to Defaults") },
-            text = { Text("This will reset all calibration values to factory defaults. Continue?") },
+            title = { Text("Factory reset?") },
+            text = {
+                Text("Send CFG RESET and discard unsaved edits. This saves the firmware's compiled " +
+                    "defaults, NOT the vehicle JSON values, and clears the saved vehicle selection. " +
+                    "Reload or select your vehicle in CAN Config afterwards. Continue?")
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
                         showResetDialog = false
-                        viewModel.resetToDefaults()
+                        viewModel.resetToFactoryDefaults()
                     }
                 ) {
                     Text("Reset", color = MaterialTheme.colorScheme.error)
@@ -225,6 +283,7 @@ private fun CalibrationItem(
     label: String,
     value: Int,
     range: IntRange,
+    enabled: Boolean,
     onValueChange: (Int) -> Unit,
     displayDivisor: Int = 1
 ) {
@@ -238,6 +297,9 @@ private fun CalibrationItem(
 
     var showEditDialog by remember { mutableStateOf(false) }
     var editText by remember(value) { mutableStateOf(formatDisplay(value)) }
+    LaunchedEffect(enabled) {
+        if (!enabled) showEditDialog = false
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -258,7 +320,7 @@ private fun CalibrationItem(
                 Text(label, style = MaterialTheme.typography.bodyMedium)
                 // Clickable value for direct editing
                 Surface(
-                    modifier = Modifier.clickable { showEditDialog = true },
+                    modifier = Modifier.clickable(enabled = enabled) { showEditDialog = true },
                     color = MaterialTheme.colorScheme.primaryContainer,
                     shape = RoundedCornerShape(4.dp)
                 ) {
@@ -272,6 +334,7 @@ private fun CalibrationItem(
             }
             Spacer(Modifier.height(8.dp))
             Slider(
+                enabled = enabled,
                 value = value.toFloat(),
                 onValueChange = { onValueChange(it.toInt()) },
                 valueRange = range.first.toFloat()..range.last.toFloat(),
@@ -296,7 +359,7 @@ private fun CalibrationItem(
     }
 
     // Edit dialog for precise input
-    if (showEditDialog) {
+    if (showEditDialog && enabled) {
         fun parseInput(text: String): Int? {
             val normalized = text.replace(',', '.')
             return if (isDecimal) {
@@ -339,6 +402,7 @@ private fun CalibrationItem(
             },
             confirmButton = {
                 TextButton(
+                    enabled = isValid && enabled,
                     onClick = {
                         if (isValid) {
                             onValueChange(parsedValue!!)

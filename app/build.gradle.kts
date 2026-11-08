@@ -27,8 +27,8 @@ android {
 
         minSdk = 24
         targetSdk = 34
-        versionCode = 11
-        versionName = "1.3.3"
+        versionCode = 12
+        versionName = "1.3.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -108,4 +108,5 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.0.0")
+    testImplementation(libs.kotlinx.coroutines.test)
 }

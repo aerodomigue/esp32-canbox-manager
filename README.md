@@ -44,10 +44,53 @@ The app communicates with the ESP32 via USB CDC serial (115200 baud) using AT-st
 |---------|-------------|
 | `SYS INFO` | Get firmware version and system info |
 | `SYS DATA` | Get live vehicle data |
-| `CFG LIST/GET/SET/SAVE` | Calibration parameters (NVS) |
-| `CAN STATUS/LIST/LOAD/DELETE` | Vehicle config files (LittleFS) |
+| `CFG LIST/GET/SET/SAVE/RESET` | Read/edit calibration, save NVS, or reset compiled defaults |
+| `CAN STATUS/LIST/LOAD/DELETE/RELOAD` | Vehicle config files (LittleFS) |
 | `LOG ON/OFF` | CAN frame debug logging |
 | `OTA START/DATA/END` | Firmware update (base64) |
+
+## Calibration and vehicle defaults
+
+The calibration screen displays values read from `CFG LIST`, never Android-side
+default numbers. An incomplete, invalid or failed read disables editing until a
+successful retry. Commands are tied to the USB connection session; reconnecting
+invalidates the previous values. Settings cannot be edited during an operation.
+
+- **Read from ESP** refreshes current runtime values and discards unsaved edits.
+- **Save to NVS** checks that the ESP still matches the last read, applies only
+  changed fields, verifies them, sends `CFG SAVE`, then reads them back again.
+  It does **not** modify the vehicle JSON. An interrupted/failed operation may
+  have applied some values; read again before editing. Readback verifies runtime
+  values, not independent NVS persistence across a power cycle.
+- **Reload vehicle profile** sends `CAN RELOAD`, not `CFG RESET`, then reads the
+  effective values. With firmware implementing authoritative `vehicleParams`,
+  explicit JSON values replace runtime/NVS values on load/reload/boot. Missing or
+  null fields retain their current values on same-profile reload; this is not a
+  reset of all fields. A missing/invalid profile is reported as an error.
+- **Factory reset** explicitly sends `CFG RESET`. It saves compiled firmware
+  defaults, does not reload JSON, and clears the saved vehicle selection. Select
+  the vehicle again in CAN Config afterwards (the active file also has a Reload
+  button). Both reset actions require confirmation.
+
+The authoritative-JSON behavior is implemented in firmware commits
+`1bb25aa` and `db592ff` on `feat/can-decoding-fixes`; do not assume older firmware
+or an unrelated release has it. The app does not emulate those semantics or
+hardcode a particular vehicle's values. See the firmware's
+[vehicle preset guide](https://github.com/aerodomigue/esp32-canbox-nissan/blob/397f808c62dd6e9e42d1af3a2bf99b46dff9027e/docs/VEHICLE_PRESET_GUIDE.md).
+
+### 1.3.4 validation gate (before merge/publication)
+
+- Run unit tests, lint, release build and independent code review.
+- On the target head unit with compatible ESP firmware, compare all seven
+  displayed fields with `CFG LIST` and the selected vehicle JSON.
+- Change and save a value; reload the profile and verify explicit JSON values
+  return. Repeat after restarting the ESP. Check missing/null fields separately.
+- Test factory reset on a backed-up test configuration; confirm compiled values,
+  then reselect the intended vehicle and check its values after reboot.
+- Test invalid/missing JSON, USB disconnect during save/reload, reconnect,
+  repeated taps and read failure: no false success, no editable stale defaults.
+- Confirm RX/ODB capture and complete USB/SD export still work with calibration.
+- Obtain user validation before merging the PR or publishing the APK release.
 
 ## Building
 

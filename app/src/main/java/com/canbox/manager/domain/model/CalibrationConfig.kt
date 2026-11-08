@@ -1,13 +1,13 @@
 package com.canbox.manager.domain.model
 
 data class CalibrationConfig(
-    val steeringOffset: Int = 0,
-    val steeringScale: Int = 300,
-    val steeringInvert: Boolean = false,
-    val indicatorTimeout: Int = 500,
-    val rpmDivisor: Int = 7,
-    val tankCapacity: Int = 45,
-    val dteDivisor: Int = 283
+    val steeringOffset: Int,
+    val steeringScale: Int,
+    val steeringInvert: Boolean,
+    val indicatorTimeout: Int,
+    val rpmDivisor: Int,
+    val tankCapacity: Int,
+    val dteDivisor: Int
 ) {
     companion object {
         // Parameter ranges for validation
@@ -19,4 +19,3 @@ data class CalibrationConfig(
         val DTE_DIVISOR_RANGE = 100..500
     }
 }
-
